@@ -246,11 +246,12 @@
   display: flex;
   align-items: flex-start;
   gap: 11px;
-  max-width: 88%;
+  max-width: 100%;
 }
 
 .message-row.user {
   align-self: flex-end;
+  max-width: 78%;
 }
 
 .message-row.assistant {
@@ -266,7 +267,8 @@
 
 .message-bubble {
   min-width: 0;
-  padding: 12px 15px;
+  max-width: 78ch;
+  padding: 16px 19px;
   border: 1px solid #e4ebe3;
   border-radius: 10px;
   background: white;
@@ -287,10 +289,10 @@
 
 .message-content {
   color: #2b3930;
-  font-size: 13px;
-  line-height: 1.75;
+  font-size: 15px;
+  line-height: 1.8;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  white-space: normal;
 }
 
 .message-content > :first-child { margin-top: 0; }
@@ -301,23 +303,40 @@
 .message-content blockquote,
 .message-content pre,
 .message-content table {
-  margin: 0.7em 0;
+  margin: 0.8em 0;
 }
 .message-content h1,
 .message-content h2,
 .message-content h3,
 .message-content h4 {
-  margin: 1em 0 0.4em;
+  margin: 1.2em 0 0.45em;
   color: #1c3624;
   line-height: 1.35;
 }
-.message-content h1 { font-size: 19px; }
-.message-content h2 { font-size: 17px; }
-.message-content h3,
+.message-content h1 { font-size: 23px; }
+.message-content h2 { font-size: 20px; }
+.message-content h3 { font-size: 17px; }
 .message-content h4 { font-size: 15px; }
 .message-content ul,
 .message-content ol {
-  padding-left: 1.5em;
+  padding-left: 1.6em;
+}
+.message-content li + li {
+  margin-top: 0.3em;
+}
+.message-content a {
+  color: #267c40;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.message-content hr {
+  height: 1px;
+  margin: 1.4em 0;
+  border: 0;
+  background: #e5ece4;
+}
+.message-content strong {
+  color: #203b28;
 }
 .message-content code {
   padding: 0.12em 0.35em;
@@ -346,12 +365,21 @@
   max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
+  white-space: normal;
+  font-size: 13px;
 }
 .message-content th,
 .message-content td {
-  padding: 6px 9px;
+  min-width: 100px;
+  padding: 8px 11px;
   border: 1px solid #dfe7de;
   text-align: left;
+  vertical-align: top;
+}
+.message-content th {
+  background: #f2f7f0;
+  color: #294d31;
+  font-weight: 700;
 }
 
 .message-pending {
@@ -621,6 +649,18 @@
 
   .message-row {
     max-width: 100%;
+  }
+
+  .message-row.user {
+    max-width: 92%;
+  }
+
+  .message-bubble {
+    padding: 13px 14px;
+  }
+
+  .message-content {
+    font-size: 14px;
   }
 
   .topic-list {

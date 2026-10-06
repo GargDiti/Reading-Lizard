@@ -17,9 +17,7 @@ def explain_topic(topic: str, content: str) -> str:
 
     prompt = f"""
 You are an AI tutor.
-
 Teach the following topic to a student.
-
 Topic:
 {topic}
 
@@ -71,7 +69,7 @@ def explain_general_query(
 
     history = _format_conversation_history(conversation_history)
     prompt = f"""
-You are LearnLoom, a friendly AI tutor.
+You are Reading Lizard, a friendly AI tutor.
 
 Previous conversation:
 {history}

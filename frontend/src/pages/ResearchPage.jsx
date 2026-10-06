@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   createConversation,
   deleteConversation,
@@ -271,7 +272,9 @@ function ResearchPage() {
                   <div className="message-bubble">
                     <span className="message-role">{message.role === "assistant" ? "Reading Lizard" : "You"}</span>
                     <div className="message-content">
-                      <ReactMarkdown>{message.content}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {message.content}
+                      </ReactMarkdown>
                     </div>
                   </div>
                 </article>
