@@ -1,0 +1,68 @@
+services:
+  - type: web
+    name: reading-lizard-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AI_SERVICE_URL
+        sync: false
+      - key: AI_STREAM_TIMEOUT_MS
+        value: "180000"
+      - key: AI_SUMMARY_TIMEOUT_MS
+        value: "90000"
+      - key: AI_REQUEST_TIMEOUT_MS
+        value: "180000"
+      - key: CONVERSATION_HISTORY_TOKEN_THRESHOLD
+        value: "6000"
+      - key: CONVERSATION_SUMMARY_TARGET_TOKENS
+        value: "800"
+      - key: CONVERSATION_SUMMARY_INPUT_TOKEN_LIMIT
+        value: "12000"
+      - key: CONVERSATION_RECENT_MESSAGE_WINDOW
+        value: "10"
+      - key: TOKEN_ESTIMATE_CHARS_PER_TOKEN
+        value: "3"
+
+  - type: web
+    name: reading-lizard-ai
+    runtime: python
+    rootDir: ai_services
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: MODEL_CONTEXT_TOKEN_LIMIT
+        value: "16384"
+      - key: AI_RESPONSE_TOKEN_BUDGET
+        value: "2048"
+      - key: AI_SYSTEM_TOKEN_RESERVE
+        value: "1500"
+      - key: CURRENT_QUESTION_TOKEN_BUDGET
+        value: "2000"
+      - key: CONVERSATION_PROMPT_TOKEN_BUDGET
+        value: "6000"
+      - key: CONVERSATION_SUMMARY_TARGET_TOKENS
+        value: "800"
+      - key: CONVERSATION_SUMMARY_INPUT_TOKEN_LIMIT
+        value: "12000"
+      - key: RAG_CONTEXT_TOKEN_BUDGET
+        value: "4000"
+      - key: TOKEN_ESTIMATE_CHARS_PER_TOKEN
+        value: "3"
+      - key: GROQ_TIMEOUT_SECONDS
+        value: "120"

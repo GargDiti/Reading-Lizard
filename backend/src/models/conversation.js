@@ -30,6 +30,24 @@ const conversationSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    rollingSummary: {
+      type: String,
+      default: "",
+    },
+    summaryThroughMessageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Message",
+      default: null,
+    },
+    summaryUpdatedAt: {
+      type: Date,
+      default: null,
+    },
+    summaryVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   {
     timestamps: true,
