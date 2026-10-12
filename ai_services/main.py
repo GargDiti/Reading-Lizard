@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 def health():
     return {"status": "ok"}
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 class QueryRequest(BaseModel):
     query: str
     source_text: str | None = None

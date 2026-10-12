@@ -149,6 +149,15 @@ Backend settings control compaction and the retained full-message window: `CONVE
 
 The conversation document stores its rolling summary, summary checkpoint message ID, update timestamp, and version. Summary updates use compare-and-swap; the source messages are retained and are never mixed with or deleted from ChromaDB.
 
+## Keep Deployed Services Awake
+
+The GitHub Actions workflow at `.github/workflows/keep-services-awake.yml` pings both services every 10 minutes and retries temporarily unavailable health endpoints. To enable it, add these repository **Variables** under **Settings > Secrets and variables > Actions > Variables**:
+
+- `AI_SERVICE_HEALTH_URL`: the public AI service health URL, ending in `/health`.
+- `BACKEND_HEALTH_URL`: the public backend health URL, ending in `/api/health`.
+
+The workflow also supports a manual run from the repository's Actions tab. Scheduled workflows run from the repository's default branch. This external ping can prevent idle suspension only when the hosting provider treats incoming health requests as activity and allows this kind of monitoring. It cannot override a provider's sleep policy or replace an always-on instance; check the provider's plan if the service still suspends.
+
 ## Tests
 
 Run the backend tests from the repository root:

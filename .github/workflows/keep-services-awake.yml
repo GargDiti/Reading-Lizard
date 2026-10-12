@@ -1,0 +1,28 @@
+name: Keep deployed services awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping-services:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping AI service health endpoint
+        env:
+          HEALTH_URL: ${{ vars.AI_SERVICE_HEALTH_URL }}
+        run: |
+          test -n "$HEALTH_URL" || { echo "Set the AI_SERVICE_HEALTH_URL repository variable."; exit 1; }
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 10 --retry-all-errors --max-time 20 \
+            "$HEALTH_URL" >/dev/null
+
+      - name: Ping backend health endpoint
+        env:
+          HEALTH_URL: ${{ vars.BACKEND_HEALTH_URL }}
+        run: |
+          test -n "$HEALTH_URL" || { echo "Set the BACKEND_HEALTH_URL repository variable."; exit 1; }
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 10 --retry-all-errors --max-time 20 \
+            "$HEALTH_URL" >/dev/null
