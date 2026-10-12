@@ -1,9 +1,17 @@
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from main import QueryRequest, analyze_query
-from services.groq_service import answer_from_context, explain_general_query
+from services.groq_service import (
+    _format_retrieved_chunks,
+    _prompt_budgets,
+    answer_from_context,
+    explain_general_query,
+    stream_general_query,
+    summarize_conversation,
+)
 from services.handlers import handle_website_learn
 from services.query_router import Action, RequestType, Source
 
@@ -30,7 +38,7 @@ class ConversationHistoryTests(unittest.TestCase):
 
         self.assertEqual(answer, "Contextual answer")
         prompt = create.call_args.kwargs["messages"][1]["content"]
-        self.assertIn("Previous conversation:", prompt)
+        self.assertIn("Previous learning context:", prompt)
         self.assertIn("USER: What is Node.js?", prompt)
         self.assertIn("ASSISTANT: Node.js is a JavaScript runtime.", prompt)
         self.assertIn("Why is it fast?", prompt)
@@ -48,8 +56,8 @@ class ConversationHistoryTests(unittest.TestCase):
 
         self.assertEqual(answer, "Contextual answer")
         prompt = create.call_args.kwargs["messages"][1]["content"]
-        self.assertIn("Conversation history:", prompt)
-        self.assertIn("Retrieved website context:", prompt)
+        self.assertIn("Conversation memory:", prompt)
+        self.assertIn("Retrieved website context and source metadata:", prompt)
         self.assertIn("Current question:", prompt)
         self.assertIn("USER: What is Node.js?", prompt)
         self.assertIn("event-driven, non-blocking architecture", prompt)
@@ -84,6 +92,7 @@ class ConversationHistoryTests(unittest.TestCase):
             source_text=None,
             conversation_history=self.history,
             selected_topic=None,
+            conversation_summary="",
         )
 
     def test_initial_website_request_returns_topics_for_selection(self):
@@ -137,6 +146,143 @@ class ConversationHistoryTests(unittest.TestCase):
             top_k=4,
         )
         answer.assert_called_once_with("Why is it fast?", retrieved, self.history)
+
+    def test_fastapi_sse_emits_incremental_tokens_then_completion(self):
+        classification = {
+            "source": Source.GENERAL,
+            "action": Action.LEARN,
+            "request_type": RequestType.GENERAL_LEARNING,
+        }
+
+        async def read_events(response):
+            return [chunk async for chunk in response.body_iterator]
+
+        with (
+            patch("main.classify_query", return_value=classification),
+            patch("main.stream_dispatch", return_value=iter(["first ", "second"])),
+        ):
+            response = analyze_query(QueryRequest(query="Teach this", stream=True))
+            events = asyncio.run(read_events(response))
+
+        self.assertEqual(response.media_type, "text/event-stream")
+        self.assertEqual(response.headers["x-accel-buffering"], "no")
+        combined = "".join(events)
+        self.assertIn('event: token\ndata: {"text": "first "}', combined)
+        self.assertIn('event: token\ndata: {"text": "second"}', combined)
+        self.assertIn('event: done\ndata: {"result": "first second"', combined)
+
+    def test_fastapi_sse_encodes_newlines_and_unicode_as_json(self):
+        classification = {
+            "source": Source.GENERAL,
+            "action": Action.LEARN,
+            "request_type": RequestType.GENERAL_LEARNING,
+        }
+
+        async def read_events(response):
+            return [chunk async for chunk in response.body_iterator]
+
+        with (
+            patch("main.classify_query", return_value=classification),
+            patch("main.stream_dispatch", return_value=iter(["line one\n\u03bb"])),
+        ):
+            response = analyze_query(QueryRequest(query="Teach this", stream=True))
+            events = asyncio.run(read_events(response))
+
+        self.assertIn('data: {"text": "line one\\n\u03bb"}', "".join(events))
+
+    def test_fastapi_sse_reports_incomplete_generation_as_error_event(self):
+        classification = {
+            "source": Source.GENERAL,
+            "action": Action.LEARN,
+            "request_type": RequestType.GENERAL_LEARNING,
+        }
+
+        def broken_stream(*_args, **_kwargs):
+            yield "partial"
+            raise RuntimeError("provider detail should not leak after tokens")
+
+        async def read_events(response):
+            return [chunk async for chunk in response.body_iterator]
+
+        with (
+            patch("main.classify_query", return_value=classification),
+            patch("main.stream_dispatch", side_effect=broken_stream),
+        ):
+            response = analyze_query(QueryRequest(query="Teach this", stream=True))
+            events = asyncio.run(read_events(response))
+
+        combined = "".join(events)
+        self.assertIn("event: token", combined)
+        self.assertIn('event: error\ndata: {"message": "The AI response ended before completion.", "incomplete": true}', combined)
+
+    def test_fastapi_summary_operation_uses_the_existing_groq_summary_function(self):
+        messages = [{"role": "user", "content": "I am learning Node.js"}]
+        with patch("main.summarize_conversation", return_value="Learning Node.js") as summarize:
+            result = analyze_query(QueryRequest(
+                query="Update summary",
+                operation="summarize",
+                conversation_summary="Existing summary",
+                messages=messages,
+                summary_target_tokens=250,
+            ))
+
+        self.assertEqual(result, {"summary": "Learning Node.js"})
+        summarize.assert_called_once_with("Existing summary", messages, 250)
+
+    def test_groq_streaming_uses_the_existing_model_and_requests_stream_mode(self):
+        chunks = [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Hello "))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="there"))]),
+        ]
+        with patch("services.groq_service.client.chat.completions.create", return_value=iter(chunks)) as create:
+            result = list(stream_general_query("Teach me", self.history))
+
+        self.assertEqual(result, ["Hello ", "there"])
+        self.assertEqual(create.call_args.kwargs["model"], "qwen/qwen3.8-27b")
+        self.assertTrue(create.call_args.kwargs["stream"])
+
+    def test_prompt_budgets_reserve_response_and_cap_total_context(self):
+        with patch.dict("os.environ", {
+            "MODEL_CONTEXT_TOKEN_LIMIT": "10000",
+            "AI_RESPONSE_TOKEN_BUDGET": "1000",
+            "AI_SYSTEM_TOKEN_RESERVE": "1000",
+            "CURRENT_QUESTION_TOKEN_BUDGET": "1500",
+            "CONVERSATION_PROMPT_TOKEN_BUDGET": "4000",
+            "RAG_CONTEXT_TOKEN_BUDGET": "4000",
+        }):
+            question, history, rag, response = _prompt_budgets()
+
+        self.assertLessEqual(question + history + rag + response + 1000, 10000)
+
+    def test_rag_prompt_keeps_url_section_and_chunk_citation_metadata(self):
+        formatted = _format_retrieved_chunks([{
+            "text": "Node uses a non-blocking event loop.",
+            "source_url": "https://nodejs.org/guide",
+            "section_title": "Event loop",
+            "chunk_id": 7,
+            "similarity": 0.82,
+        }], 500)
+
+        self.assertIn("https://nodejs.org/guide", formatted)
+        self.assertIn("Event loop", formatted)
+        self.assertIn("chunk 7", formatted)
+
+    def test_summary_prompt_requests_learning_goals_misunderstandings_and_open_questions(self):
+        response = self._groq_response("Updated memory")
+        messages = [{"role": "assistant", "content": "The learner asked a follow-up."}]
+        with patch("services.groq_service.client.chat.completions.create", return_value=response) as create:
+            result = summarize_conversation("Existing context", messages, 200)
+
+        self.assertEqual(result, "Updated memory")
+        prompt = create.call_args.kwargs["messages"][1]["content"]
+        self.assertIn("misunderstandings", prompt)
+        self.assertIn("unresolved questions", prompt)
+        self.assertEqual(create.call_args.kwargs["max_tokens"], 200)
+
+    def test_summary_rejects_oversized_batch_instead_of_silently_dropping_turns(self):
+        with patch.dict("os.environ", {"CONVERSATION_SUMMARY_INPUT_TOKEN_LIMIT": "2"}):
+            with self.assertRaisesRegex(ValueError, "exceeds its configured input budget"):
+                summarize_conversation("", [{"role": "user", "content": "A longer turn"}], 100)
 
 
 if __name__ == "__main__":

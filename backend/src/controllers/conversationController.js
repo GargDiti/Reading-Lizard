@@ -2,9 +2,13 @@ import Conversation from "../models/conversation.js";
 import Message from "../models/message.js";
 import mongoose from "mongoose";
 import aiService from "../services/aiService.js";
+import { buildConversationContext } from "../services/conversationMemory.js";
 
 const MAX_MESSAGE_LENGTH = 20000;
-const MAX_HISTORY_MESSAGES = 10;
+
+function getStreamTimeoutMs() {
+  return Number(process.env.AI_STREAM_TIMEOUT_MS) || 180000;
+}
 
 function isValidConversationId(id) {
   return mongoose.Types.ObjectId.isValid(id);
@@ -152,7 +156,254 @@ const getMessages = async (req, res) => {
   }
 };
 
+function writeSse(res, event, payload) {
+  if (res.destroyed || res.writableEnded) return Promise.resolve(false);
+  const accepted = res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+  if (accepted) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onDrain = () => {
+      cleanup();
+      resolve(true);
+    };
+    const onClose = () => {
+      cleanup();
+      resolve(false);
+    };
+    const cleanup = () => {
+      res.off("drain", onDrain);
+      res.off("close", onClose);
+    };
+    res.once("drain", onDrain);
+    res.once("close", onClose);
+  });
+}
+
+function validateMessageRequest(req, res) {
+  const content = req.body?.message;
+  if (typeof content !== "string" || !content.trim()) {
+    res.status(400).json({ success: false, message: "Message cannot be empty" });
+    return null;
+  }
+  if (content.trim().length > MAX_MESSAGE_LENGTH) {
+    res.status(400).json({
+      success: false,
+      message: `Message cannot exceed ${MAX_MESSAGE_LENGTH} characters`,
+    });
+    return null;
+  }
+  const selectedTopic = req.body?.selectedTopic;
+  if (selectedTopic !== undefined && selectedTopic !== null && typeof selectedTopic !== "string") {
+    res.status(400).json({ success: false, message: "Selected topic must be text" });
+    return null;
+  }
+  if (typeof req.body?.requestId !== "string"
+    || !/^[\w-]{8,128}$/.test(req.body.requestId)) {
+    res.status(400).json({ success: false, message: "A valid requestId is required" });
+    return null;
+  }
+  return { content: content.trim(), selectedTopic, requestId: req.body.requestId };
+}
+
+async function sendStreamingMessage(req, res) {
+  const input = validateMessageRequest(req, res);
+  if (!input) return;
+
+  const { id } = req.params;
+  try {
+    const found = await findOwnedConversation(id, req.user.id);
+    if (found.error === "invalid") {
+      return res.status(400).json({ success: false, message: "Invalid conversation ID" });
+    }
+    if (!found.conversation) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+
+    let userMessage;
+    try {
+      userMessage = await Message.create({
+        conversationId: found.conversation._id,
+        role: "user",
+        content: input.content,
+        requestId: input.requestId,
+        status: "complete",
+      });
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+      userMessage = await Message.findOne({
+        conversationId: found.conversation._id,
+        requestId: input.requestId,
+        role: "user",
+      });
+      const previousAssistant = userMessage
+        ? await Message.findOne({ inReplyTo: userMessage._id })
+        : null;
+      if (previousAssistant?.status === "complete") {
+        res.set({
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+        });
+        res.flushHeaders();
+        await writeSse(res, "token", { text: previousAssistant.content });
+        await writeSse(res, "done", {
+          success: true,
+          message: previousAssistant,
+          replayed: true,
+        });
+        return res.end();
+      }
+      return res.status(409).json({
+        success: false,
+        message: "This request was already accepted; submit a new requestId to retry.",
+      });
+    }
+
+    let assistantMessage;
+    try {
+      assistantMessage = await Message.create({
+        conversationId: found.conversation._id,
+        role: "assistant",
+        content: "",
+        status: "streaming",
+        inReplyTo: userMessage._id,
+      });
+    } catch (error) {
+      if (error.code === 11000) {
+        return res.status(409).json({ success: false, message: "A response is already being generated" });
+      }
+      throw error;
+    }
+
+    res.set({
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders();
+
+    const controller = new AbortController();
+    let clientDisconnected = false;
+    const timeout = setTimeout(
+      () => controller.abort(new Error("AI request timed out")),
+      getStreamTimeoutMs(),
+    );
+    const abortForDisconnect = () => {
+      if (!res.writableEnded) {
+        clientDisconnected = true;
+        controller.abort(new Error("Client disconnected"));
+      }
+    };
+    res.once("close", abortForDisconnect);
+
+    let fullResponse = "";
+    let completed = false;
+    let finalized = false;
+    try {
+      const context = await buildConversationContext({
+        conversationId: found.conversation._id,
+        currentMessageId: userMessage._id,
+      });
+      if (controller.signal.aborted) throw controller.signal.reason;
+      const events = aiService.streamAnswer({
+        query: input.content,
+        conversationHistory: context.history,
+        conversationSummary: context.summary,
+        sourceUrl: found.conversation.sourceUrl,
+        selectedTopic: input.selectedTopic,
+      }, { signal: controller.signal });
+
+      for await (const item of events) {
+        if (item.event === "token") {
+          fullResponse += item.data.text;
+          const writable = await writeSse(res, "token", item.data);
+          if (!writable) {
+            clientDisconnected = true;
+            controller.abort(new Error("Client disconnected"));
+            break;
+          }
+        } else if (item.event === "done") {
+          if (item.data.result && item.data.result !== fullResponse) {
+            fullResponse = item.data.result;
+          }
+          const completion = await Message.updateOne(
+            { _id: assistantMessage._id, status: "streaming" },
+            { $set: { content: fullResponse, status: "complete" } },
+          );
+          if (completion.modifiedCount !== 1) {
+            throw new Error("Could not persist the completed assistant response");
+          }
+          completed = true;
+
+          const updates = {};
+          if (found.conversation.title === "New Conversation") {
+            updates.title = input.content.slice(0, 120);
+          }
+          if (item.data.url && !found.conversation.sourceUrl) {
+            updates.sourceUrl = item.data.url;
+          }
+          updates.awaitingTopicSelection = item.data.awaiting_topic_selection === true;
+          updates.allowWholeWebsite = item.data.allow_whole_website === true;
+          if (Array.isArray(item.data.topics)) updates.availableTopics = item.data.topics;
+          await Conversation.updateOne(
+            { _id: found.conversation._id, userId: req.user.id },
+            { $set: { ...updates, updatedAt: new Date() } },
+          );
+
+          await writeSse(res, "done", {
+            success: true,
+            conversationId: found.conversation._id,
+            message: { ...assistantMessage.toObject(), content: fullResponse, status: "complete" },
+            sourceUrl: item.data.url || found.conversation.sourceUrl || null,
+            topics: item.data.topics || [],
+            awaitingTopicSelection: item.data.awaiting_topic_selection === true,
+            allowWholeWebsite: item.data.allow_whole_website === true,
+          });
+          break;
+        }
+      }
+    } catch (error) {
+      const disconnected = clientDisconnected;
+      await Message.updateOne(
+        { _id: assistantMessage._id, status: "streaming" },
+        { $set: { content: fullResponse, status: fullResponse ? "incomplete" : "failed" } },
+      ).then(() => { finalized = true; }).catch((persistError) => {
+        console.error("[MESSAGE] Could not mark interrupted response:", persistError.message);
+      });
+
+      if (!disconnected && !res.destroyed) {
+        await writeSse(res, "error", {
+          message: controller.signal.aborted ? "AI response timed out" : error.message,
+          incomplete: !completed && Boolean(fullResponse),
+        });
+      }
+    } finally {
+      clearTimeout(timeout);
+      res.off("close", abortForDisconnect);
+      if (!completed && !finalized && assistantMessage.status === "streaming") {
+        await Message.updateOne(
+          { _id: assistantMessage._id, status: "streaming" },
+          { $set: { content: fullResponse, status: fullResponse ? "incomplete" : "failed" } },
+        ).then(() => { finalized = true; }).catch((error) => {
+          console.error("[MESSAGE] Could not finalize interrupted response:", error.message);
+        });
+      }
+      if (!res.writableEnded && !res.destroyed) res.end();
+    }
+  } catch (error) {
+    console.error("[MESSAGE] Could not start streaming response:", error.message);
+    if (!res.headersSent) {
+      return res.status(500).json({ success: false, message: "Failed to start response stream" });
+    }
+    if (!res.destroyed) {
+      await writeSse(res, "error", { message: "Failed to start response stream", incomplete: false });
+      res.end();
+    }
+  }
+}
+
 const sendMessage = async (req, res) => {
+  if (req.body?.stream === true) return sendStreamingMessage(req, res);
   try {
     const { id } = req.params;
     const content = req.body?.message;
@@ -187,17 +438,11 @@ const sendMessage = async (req, res) => {
     });
     console.log(`[MESSAGE] User message saved: ${userMessage._id}`);
 
-    const previousMessages = await Message.find({
-      conversationId: conversation._id,
-      _id: { $ne: userMessage._id },
-    })
-      .sort({ createdAt: -1, _id: -1 })
-      .limit(MAX_HISTORY_MESSAGES)
-      .lean();
-    const conversationHistory = previousMessages.reverse().map(({ role, content: text }) => ({
-      role,
-      content: text,
-    }));
+    const { history: conversationHistory, summary: conversationSummary } =
+      await buildConversationContext({
+        conversationId: conversation._id,
+        currentMessageId: userMessage._id,
+      });
     console.log(`[HISTORY] Previous messages retrieved: ${conversationHistory.length}`);
 
     let aiResult;
@@ -206,6 +451,7 @@ const sendMessage = async (req, res) => {
       aiResult = await aiService.generateAnswer({
         query: content.trim(),
         conversationHistory,
+        conversationSummary,
         sourceUrl: conversation.sourceUrl,
         selectedTopic,
       });

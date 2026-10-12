@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -14,7 +15,7 @@ import authMiddleware from "../src/middleware/authmiddleware.js";
 import Conversation from "../src/models/conversation.js";
 import Message from "../src/models/message.js";
 import User from "../src/models/User.js";
-import aiService, { generateAnswer } from "../src/services/aiService.js";
+import aiService, { generateAnswer, streamAnswer } from "../src/services/aiService.js";
 
 const userId = "64b000000000000000000001";
 const otherUserId = "64b000000000000000000002";
@@ -33,6 +34,39 @@ function mockResponse() {
       return this;
     },
   };
+}
+
+function mockStreamingResponse() {
+  const response = new EventEmitter();
+  response.statusCode = 200;
+  response.headersSent = false;
+  response.writableEnded = false;
+  response.destroyed = false;
+  response.events = [];
+  response.status = function status(code) {
+    this.statusCode = code;
+    return this;
+  };
+  response.json = function json(body) {
+    this.body = body;
+    return this;
+  };
+  response.set = function set(headers) {
+    this.headers = headers;
+    return this;
+  };
+  response.flushHeaders = function flushHeaders() {
+    this.headersSent = true;
+  };
+  response.write = function write(chunk) {
+    this.events.push(chunk);
+    return true;
+  };
+  response.end = function end() {
+    this.writableEnded = true;
+    this.emit("close");
+  };
+  return response;
 }
 
 function stub(t, target, key, replacement) {
@@ -228,6 +262,7 @@ test("message flow stores both roles and sends recent history plus the saved sou
   stub(t, Conversation, "findOne", async (filter) =>
     filter.userId === userId ? conversation : null,
   );
+  stub(t, Conversation, "findById", () => ({ lean: async () => conversation }));
   stub(t, Message, "create", async (message) => {
     const saved = {
       ...message,
@@ -237,17 +272,12 @@ test("message flow stores both roles and sends recent history plus the saved sou
     storedMessages.push(saved);
     return saved;
   });
-  stub(t, Message, "find", (filter) => {
+  stub(t, Message, "find", () => {
     const results = storedMessages
-      .filter((message) => message._id !== filter._id.$ne)
-      .sort((left, right) => right.createdAt - left.createdAt)
-      .slice(0, 10);
+      .slice()
+      .sort((left, right) => left.createdAt - right.createdAt);
     return {
       sort() { return this; },
-      limit(count) {
-        assert.equal(count, 10);
-        return this;
-      },
       lean: async () => results,
     };
   });
@@ -320,10 +350,10 @@ test("message endpoint forwards and returns a selected website topic", async (t)
     sourceUrl: "https://nodejs.org/learn",
   };
   stub(t, Conversation, "findOne", async () => conversation);
+  stub(t, Conversation, "findById", () => ({ lean: async () => conversation }));
   stub(t, Message, "create", async (message) => ({ _id: "message-id", ...message }));
   stub(t, Message, "find", () => ({
     sort() { return this; },
-    limit() { return this; },
     lean: async () => [],
   }));
   stub(t, Conversation, "updateOne", async () => ({ modifiedCount: 1 }));
@@ -349,6 +379,170 @@ test("message endpoint forwards and returns a selected website topic", async (t)
   assert.equal(aiPayload.selectedTopic, "Introduction");
   assert.deepEqual(response.body.topics, []);
   assert.equal(response.body.awaitingTopicSelection, false);
+});
+
+test("an empty assistant placeholder is valid only while it is streaming", async () => {
+  const streamingPlaceholder = new Message({
+    conversationId,
+    role: "assistant",
+    content: "",
+    status: "streaming",
+  });
+  await assert.doesNotReject(streamingPlaceholder.validate());
+
+  const completedWithoutContent = new Message({
+    conversationId,
+    role: "assistant",
+    content: "",
+    status: "complete",
+  });
+  await assert.rejects(completedWithoutContent.validate(), /content/);
+});
+
+test("streamed message persists one assistant response and replays duplicate request IDs", async (t) => {
+  const conversation = {
+    _id: conversationId,
+    userId,
+    title: "New Conversation",
+    sourceUrl: null,
+    toObject() { return { ...this }; },
+  };
+  const storedMessages = [];
+  const updates = [];
+  let createCount = 0;
+
+  stub(t, Conversation, "findOne", async () => conversation);
+  stub(t, Conversation, "findById", () => ({ lean: async () => conversation }));
+  stub(t, Conversation, "updateOne", async (_filter, update) => {
+    Object.assign(conversation, update.$set);
+    return { modifiedCount: 1 };
+  });
+  stub(t, Message, "find", () => ({
+    sort() { return this; },
+    lean: async () => storedMessages.filter(({ status }) => status !== "streaming"),
+  }));
+  stub(t, Message, "create", async (details) => {
+    createCount += 1;
+    if (details.requestId && storedMessages.some(({ requestId }) => requestId === details.requestId)) {
+      const duplicate = new Error("duplicate request ID");
+      duplicate.code = 11000;
+      throw duplicate;
+    }
+    const saved = {
+      ...details,
+      _id: `stream-message-${createCount}`,
+      createdAt: new Date(Date.now() + createCount),
+      toObject() { return { ...this, toObject: undefined }; },
+    };
+    storedMessages.push(saved);
+    return saved;
+  });
+  stub(t, Message, "findOne", async (filter) => {
+    if (filter.requestId) {
+      return storedMessages.find((message) => message.requestId === filter.requestId) || null;
+    }
+    return storedMessages.find((message) => String(message.inReplyTo) === String(filter.inReplyTo)) || null;
+  });
+  stub(t, Message, "updateOne", async (filter, update) => {
+    updates.push({ filter, update });
+    const message = storedMessages.find(({ _id }) => String(_id) === String(filter._id));
+    if (!message || message.status !== filter.status) return { modifiedCount: 0 };
+    Object.assign(message, update.$set);
+    return { modifiedCount: 1 };
+  });
+  stub(t, aiService, "streamAnswer", async function* () {
+    yield { event: "token", data: { text: "Streaming " } };
+    yield { event: "token", data: { text: "works." } };
+    yield { event: "done", data: {
+      result: "Streaming works.",
+      url: null,
+      topics: [],
+      awaiting_topic_selection: false,
+      allow_whole_website: false,
+    } };
+  });
+
+  const request = {
+    params: { id: conversationId },
+    user: { id: userId },
+    body: { message: "Explain streaming", stream: true, requestId: "request-0001" },
+  };
+  const response = mockStreamingResponse();
+  await sendMessage(request, response);
+
+  assert.equal(response.writableEnded, true);
+  assert.equal(storedMessages.length, 2);
+  assert.equal(storedMessages[0].role, "user");
+  assert.equal(storedMessages[1].role, "assistant");
+  assert.equal(storedMessages[1].content, "Streaming works.");
+  assert.equal(storedMessages[1].status, "complete");
+  assert.equal(updates.length, 1);
+  assert.equal(response.events.filter((event) => event.startsWith("event: token")).length, 2);
+  assert.match(response.events.at(-1), /event: done/);
+
+  const replay = mockStreamingResponse();
+  await sendMessage(request, replay);
+  assert.equal(createCount, 3);
+  assert.equal(replay.events.filter((event) => event.startsWith("event: token")).length, 1);
+  assert.match(replay.events.at(-1), /"replayed":true/);
+});
+
+test("client disconnect saves partial assistant text once with incomplete status", async (t) => {
+  const conversation = { _id: conversationId, userId, title: "Node.js", sourceUrl: null };
+  const storedMessages = [];
+  const updates = [];
+  stub(t, Conversation, "findOne", async () => conversation);
+  stub(t, Conversation, "findById", () => ({ lean: async () => conversation }));
+  stub(t, Message, "find", () => ({ sort() { return this; }, lean: async () => [] }));
+  stub(t, Message, "create", async (details) => {
+    const saved = {
+      ...details,
+      _id: `disconnect-${storedMessages.length}`,
+      toObject() { return { ...this }; },
+    };
+    storedMessages.push(saved);
+    return saved;
+  });
+  stub(t, Message, "findOne", async () => null);
+  stub(t, Message, "updateOne", async (filter, update) => {
+    updates.push(update.$set);
+    const message = storedMessages.find(({ _id }) => _id === filter._id);
+    if (message?.status !== filter.status) return { modifiedCount: 0 };
+    Object.assign(message, update.$set);
+    return { modifiedCount: 1 };
+  });
+  stub(t, aiService, "streamAnswer", async function* (_payload, { signal }) {
+    yield { event: "token", data: { text: "partial answer" } };
+    if (!signal.aborted) {
+      await new Promise((resolve) => {
+        signal.addEventListener("abort", resolve, { once: true });
+        if (signal.aborted) resolve();
+      });
+    }
+    throw signal.reason;
+  });
+
+  const response = mockStreamingResponse();
+  const write = response.write;
+  response.write = function writeThenDisconnect(chunk) {
+    const accepted = write.call(this, chunk);
+    if (chunk.startsWith("event: token")) {
+      this.destroyed = true;
+      this.emit("close");
+    }
+    return accepted;
+  };
+  await sendMessage({
+    params: { id: conversationId },
+    user: { id: userId },
+    body: { message: "Explain this", stream: true, requestId: "request-disconnect" },
+  }, response);
+
+  assert.equal(storedMessages.length, 2);
+  assert.equal(storedMessages[1].content, "partial answer");
+  assert.equal(storedMessages[1].status, "incomplete");
+  assert.equal(updates.length, 1);
+  assert.equal(response.events.filter((event) => event.startsWith("event: token")).length, 1);
 });
 
 test("message endpoint rejects invalid IDs, empty or oversized messages, and other users", async (t) => {
@@ -391,7 +585,15 @@ test("message endpoint rejects invalid IDs, empty or oversized messages, and oth
     otherUserResponse,
   );
   assert.equal(otherUserResponse.statusCode, 404);
-  assert.equal(lookupCount, 1);
+
+  const streamingOtherUserResponse = mockResponse();
+  await sendMessage({
+    params: { id: conversationId },
+    user: { id: otherUserId },
+    body: { message: "Hello", stream: true, requestId: "request-0002" },
+  }, streamingOtherUserResponse);
+  assert.equal(streamingOtherUserResponse.statusCode, 404);
+  assert.equal(lookupCount, 2);
 });
 
 test("Node AI client posts query, history, and source URL to FastAPI", async (t) => {
@@ -428,4 +630,59 @@ test("Node AI client posts query, history, and source URL to FastAPI", async (t)
     source_url: "https://nodejs.org/learn",
     selected_topic: null,
   });
+});
+
+test("Node AI client forwards SSE tokens and rejects incomplete streams", async (t) => {
+  const priorUrl = process.env.AI_SERVICE_URL;
+  process.env.AI_SERVICE_URL = "http://localhost:8000";
+  t.after(() => {
+    if (priorUrl === undefined) delete process.env.AI_SERVICE_URL;
+    else process.env.AI_SERVICE_URL = priorUrl;
+  });
+
+  let requestBody;
+  const frames = [
+    'event: token\ndata: {"text":"first "}\n\n',
+    'event: token\ndata: {"text":"second"}\n\n',
+    'event: done\ndata: {"result":"first second"}\n\n',
+  ];
+  stub(t, globalThis, "fetch", async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    let index = 0;
+    return {
+      ok: true,
+      body: new ReadableStream({
+        pull(controller) {
+          if (index === frames.length) return controller.close();
+          controller.enqueue(new TextEncoder().encode(frames[index++]));
+        },
+      }),
+    };
+  });
+
+  const received = [];
+  for await (const event of streamAnswer({ query: "Teach me", conversationHistory: [] })) {
+    received.push(event);
+  }
+
+  assert.deepEqual(received.map(({ event }) => event), ["token", "token", "done"]);
+  assert.deepEqual(received.slice(0, 2).map(({ data }) => data.text), ["first ", "second"]);
+  assert.equal(requestBody.stream, true);
+  assert.equal(requestBody.query, "Teach me");
+
+  stub(t, globalThis, "fetch", async () => ({
+    ok: true,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: token\ndata: {"text":"partial"}\n\n'));
+        controller.close();
+      },
+    }),
+  }));
+  await assert.rejects(
+    async () => {
+      for await (const _event of streamAnswer({ query: "Incomplete" })) {}
+    },
+    /AI stream ended before completion/,
+  );
 });

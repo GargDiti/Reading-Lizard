@@ -7,7 +7,7 @@ import {
   deleteConversation,
   getConversation,
   listConversations,
-  sendConversationMessage,
+  streamConversationMessage,
 } from "../api/conversationApi";
 import { useAuth } from "../context/AuthContext";
 import Navbar from "../components/navbar";
@@ -41,6 +41,9 @@ function ResearchPage() {
   const composerRef = useRef(null);
   const autoStartRef = useRef(false);
   const submitMessageRef = useRef(null);
+  const activeStreamRef = useRef(null);
+
+  useEffect(() => () => activeStreamRef.current?.abort(), []);
 
   useEffect(() => {
     if (!token) {
@@ -79,6 +82,7 @@ function ResearchPage() {
   }, [location.pathname, location.state, loadingList, token, navigate]);
 
   async function openConversation(conversationId) {
+    activeStreamRef.current?.abort();
     setLoadingConversation(true);
     setError("");
     setNotice("");
@@ -98,6 +102,7 @@ function ResearchPage() {
   }
 
   async function startNewConversation() {
+    activeStreamRef.current?.abort();
     setError("");
     setConversation(null);
     setMessages([]);
@@ -129,13 +134,24 @@ function ResearchPage() {
     setNotice("");
     setSending(true);
     setDraft("");
+    const requestId = crypto.randomUUID?.()
+      || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const streamController = new AbortController();
+    activeStreamRef.current = streamController;
+    const streamingAssistantId = `stream-${requestId}`;
     const optimisticUserMessage = {
       _id: `pending-${Date.now()}`,
       role: "user",
       content: messageText,
       createdAt: new Date().toISOString(),
     };
-    setMessages((current) => [...current, optimisticUserMessage]);
+    setMessages((current) => [...current, optimisticUserMessage, {
+      _id: streamingAssistantId,
+      role: "assistant",
+      content: "",
+      status: "streaming",
+      createdAt: new Date().toISOString(),
+    }]);
 
     try {
       let activeConversation = conversation;
@@ -149,21 +165,28 @@ function ResearchPage() {
         ]);
       }
 
-      const response = await sendConversationMessage(
+      const response = await streamConversationMessage(
         token,
         activeConversation._id,
         messageText,
         selectedTopic,
+        {
+          requestId,
+          signal: streamController.signal,
+          onToken: (text) => setMessages((current) => current.map((message) =>
+            message._id === streamingAssistantId
+              ? { ...message, content: message.content + text }
+              : message,
+          )),
+        },
       );
       const assistantMessage = response.message;
-      setMessages((current) => [
-        ...current.filter(({ _id }) => _id !== optimisticUserMessage._id),
-        {
-          ...optimisticUserMessage,
-          _id: `sent-${optimisticUserMessage._id}`,
-        },
-        assistantMessage,
-      ]);
+      setMessages((current) => current.map((message) => {
+        if (message._id === optimisticUserMessage._id) {
+          return { ...optimisticUserMessage, _id: `sent-${optimisticUserMessage._id}` };
+        }
+        return message._id === streamingAssistantId ? assistantMessage : message;
+      }));
       setTopics(response.topics || []);
       setAwaitingTopicSelection(response.awaitingTopicSelection === true);
       setAllowWholeWebsite(response.allowWholeWebsite === true);
@@ -193,13 +216,34 @@ function ResearchPage() {
         setNotice("Choose a section to focus the next answer, or ask about the whole page.");
       }
     } catch (requestError) {
-      setMessages((current) => current.filter(({ _id }) => _id !== optimisticUserMessage._id));
-      setDraft(messageText);
-      setError(requestError.message);
+      const interrupted = requestError.name === "AbortError" || requestError.incomplete;
+      setMessages((current) => current.map((message) => {
+        if (message._id === optimisticUserMessage._id) {
+          return { ...message, _id: `sent-${optimisticUserMessage._id}` };
+        }
+        if (message._id === streamingAssistantId) {
+          return {
+            ...message,
+            content: requestError.partialContent ?? message.content,
+            status: interrupted ? "incomplete" : "failed",
+          };
+        }
+        return message;
+      }));
+      if (requestError.name !== "AbortError") {
+        setError(requestError.message);
+      } else {
+        setNotice("Response stopped. Its partial answer is marked incomplete.");
+      }
     } finally {
+      if (activeStreamRef.current === streamController) activeStreamRef.current = null;
       setSending(false);
       requestAnimationFrame(() => composerRef.current?.focus());
     }
+  }
+
+  function stopResponse() {
+    activeStreamRef.current?.abort();
   }
 
   submitMessageRef.current = submitMessage;
@@ -270,7 +314,10 @@ function ResearchPage() {
                 <article className={`message-row ${message.role}`} key={message._id}>
                   {message.role === "assistant" && <img className="message-avatar" src={logo} alt="Reading Lizard" />}
                   <div className="message-bubble">
-                    <span className="message-role">{message.role === "assistant" ? "Reading Lizard" : "You"}</span>
+                    <span className="message-role">
+                      {message.role === "assistant" ? "Reading Lizard" : "You"}
+                      {message.status === "incomplete" && " · Incomplete"}
+                    </span>
                     <div className="message-content">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {message.content}
@@ -279,7 +326,7 @@ function ResearchPage() {
                   </div>
                 </article>
               ))}
-              {sending && <div className="message-pending"><span /><span /><span /> Reading the sources…</div>}
+              {sending && <div className="message-pending"><span /><span /><span /> Generating response…</div>}
             </div>
           ) : (
             <div className="research-empty-state">
@@ -347,9 +394,11 @@ function ResearchPage() {
             />
             <div className="composer-footer">
               <span>Enter to send · Shift+Enter for a new line</span>
-              <button type="submit" disabled={sending || !draft.trim()} aria-label="Send message" title="Send message">
-                {sending ? "…" : "↑"}
-              </button>
+              {sending ? (
+                <button type="button" onClick={stopResponse} aria-label="Stop response" title="Stop response">■</button>
+              ) : (
+                <button type="submit" disabled={!draft.trim()} aria-label="Send message" title="Send message">↑</button>
+              )}
             </div>
           </form>
         </main>

@@ -672,3 +672,7 @@
     width: 100%;
   }
 }
+
+.message-role:has(+ .message-content) {
+  min-height: 12px;
+}
