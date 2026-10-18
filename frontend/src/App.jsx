@@ -5,6 +5,7 @@ import Features from "./components/Features";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ResearchPage from "./pages/ResearchPage";
+import AccountPage from "./pages/AccountPage";
 import { AuthProvider } from "./context/AuthContext";
 import { useAuth } from "./context/AuthContext";
 
@@ -26,9 +27,10 @@ function Home() {
 }
 
 function ProtectedRoute({ children }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, authReady } = useAuth();
   const location = useLocation();
 
+  if (!authReady) return <div className="route-loading" role="status">Checking your account…</div>;
   if (!isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
@@ -43,6 +45,7 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/register" element={<Signup />} />
         <Route
           path="/research"
           element={(
@@ -51,6 +54,7 @@ function App() {
             </ProtectedRoute>
           )}
         />
+        <Route path="/account" element={<ProtectedRoute><AccountPage /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AuthProvider>

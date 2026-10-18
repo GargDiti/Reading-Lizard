@@ -2,6 +2,21 @@ import User from "../models/User.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
+async function getProfile(req, res, next) {
+  try {
+    const user = await User.findById(req.user.id).select("name email createdAt");
+    if (!user) {
+      return res.status(404).json({ success: false, message: "Account not found" });
+    }
+    return res.status(200).json({
+      success: true,
+      user: { id: user._id, name: user.name, email: user.email, createdAt: user.createdAt },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function register(req, res, next) {
   try {
     // 1. Read input from the request body
@@ -146,4 +161,4 @@ async function login(req, res, next) {
   }
 }
 
-export { register, login };
+export { register, login, getProfile };

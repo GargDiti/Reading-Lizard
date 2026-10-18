@@ -1,3 +1,9 @@
+envVarGroups:
+  - name: reading-lizard-internal-ai
+    envVars:
+      - key: AI_SERVICE_TOKEN
+        generateValue: true
+
 services:
   - type: web
     name: reading-lizard-backend
@@ -13,6 +19,9 @@ services:
         generateValue: true
       - key: AI_SERVICE_URL
         sync: false
+      - fromGroup: reading-lizard-internal-ai
+      - key: APP_ENV
+        value: production
       - key: AI_STREAM_TIMEOUT_MS
         value: "180000"
       - key: AI_SUMMARY_TIMEOUT_MS
@@ -40,6 +49,9 @@ services:
     envVars:
       - key: GROQ_API_KEY
         sync: false
+      - fromGroup: reading-lizard-internal-ai
+      - key: APP_ENV
+        value: production
       - key: FIRECRAWL_API_KEY
         sync: false
       - key: UPSTASH_REDIS_REST_URL

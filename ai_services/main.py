@@ -1,7 +1,9 @@
 import json
 import logging
+import hmac
+import os
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 from dotenv import load_dotenv
@@ -18,9 +20,17 @@ logger = logging.getLogger(__name__)
 def health():
     return {"status": "ok"}
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+def require_backend_token(authorization: str | None = Header(default=None)):
+    expected = os.getenv("AI_SERVICE_TOKEN", "").strip()
+    production = os.getenv("APP_ENV", "development").lower() == "production"
+    if not expected:
+        if production:
+            raise HTTPException(status_code=503, detail="AI service authentication is not configured")
+        return
+
+    scheme, _, supplied = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Backend authentication required")
 
 class QueryRequest(BaseModel):
     query: str
@@ -106,7 +116,7 @@ def _stream_learning_response(request: QueryRequest):
         })
 
 
-@app.post("/analyze-query")
+@app.post("/analyze-query", dependencies=[Depends(require_backend_token)])
 def analyze_query(request: QueryRequest):
     if request.operation == "summarize":
         summary = summarize_conversation(
