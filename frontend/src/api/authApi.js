@@ -11,36 +11,45 @@ async function parseResponse(res) {
       (data && (data.message || data.error || data.msg)) ||
       (typeof data === "string" && data) ||
       `Request failed (${res.status})`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = res.status;
+    throw error;
   }
 
   return data;
 }
 
+async function request(path, options = {}) {
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, options);
+  } catch {
+    throw new Error("Could not reach the Reading Lizard backend. Check that it is running.");
+  }
+  return parseResponse(response);
+}
+
 // POST /api/auth/login  { email, password }
 export async function loginRequest({ email, password }) {
-  const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+  return request("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
-  return parseResponse(res);
 }
 
 // POST /api/auth/register  { name, email, password }
 export async function registerRequest({ name, email, password }) {
-  const res = await fetch(`${API_BASE_URL}/api/auth/register`, {
+  return request("/api/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, email, password }),
   });
-  return parseResponse(res);
 }
 
 // GET /api/auth/profile  (uses stored token)
 export async function fetchProfile(token) {
-  const res = await fetch(`${API_BASE_URL}/api/auth/profile`, {
+  return request("/api/auth/profile", {
     headers: { Authorization: `Bearer ${token}` },
   });
-  return parseResponse(res);
 }

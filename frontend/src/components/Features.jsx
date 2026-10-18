@@ -1,54 +1,19 @@
+import SpotlightCard from "./reactbits/SpotlightCard";
+import AnimatedContent from "./reactbits/AnimatedContent";
 import "./Features.css";
 
 const FEATURES = [
-  {
-    icon: "🌐",
-    title: "Smart Web Crawling",
-    text: "Bring a webpage into your research and get answers grounded in its content.",
-  },
-  {
-    icon: "📄",
-    title: "Ask Any Question",
-    text: "Explore a topic directly, even when you do not have a website to share.",
-  },
-  {
-    icon: "✦",
-    title: "Choose a Topic",
-    text: "Select a section from a scraped page and focus your next question.",
-  },
-  {
-    icon: "💬",
-    title: "Conversation Memory",
-    text: "Ask follow-ups naturally; recent turns stay with your saved conversation.",
-  },
-  {
-    icon: "🗂",
-    title: "Saved Research",
-    text: "Return to your conversations and continue where you left off.",
-  },
-  {
-    icon: "🔐",
-    title: "Private Workspace",
-    text: "Your saved conversations are available only to your signed-in account.",
-  },
+  { number: "01", icon: "▤", title: "Answers with context", text: "Get clear, source-grounded answers with references to the content you brought into the conversation." },
+  { number: "02", icon: "⌘", title: "Follow connected topics", text: "Explore extracted page sections, related concepts, and connections as you learn." },
+  { number: "03", icon: "↗", title: "Keep your research", text: "Save conversations, revisit them at any time, and continue building your knowledge." },
 ];
 
 function Features() {
   return (
     <section className="features" id="features">
-      <h2>
-        Powerful features for deep understanding
-        <span className="features-underline" />
-      </h2>
-
-      <div className="features-grid">
-        {FEATURES.map((f) => (
-          <div className="feature-card" key={f.title}>
-            <div className="feature-icon">{f.icon}</div>
-            <h3>{f.title}</h3>
-            <p>{f.text}</p>
-          </div>
-        ))}
+      <div className="features-inner">
+        <div className="features-heading"><p className="section-kicker">BUILT FOR CURIOUS MINDS</p><h2>From first question to real understanding.</h2></div>
+        <div className="features-grid">{FEATURES.map((feature) => <AnimatedContent key={feature.number}><SpotlightCard className="feature-card" spotlightColor="rgba(49, 104, 68, 0.09)"><span className="feature-icon" aria-hidden="true">{feature.icon}</span><div className="feature-copy"><span className="feature-number">{feature.number}</span><h3>{feature.title}</h3><p>{feature.text}</p></div></SpotlightCard></AnimatedContent>)}</div>
       </div>
     </section>
   );

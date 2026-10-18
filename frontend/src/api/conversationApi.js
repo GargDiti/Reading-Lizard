@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "./config";
+import { notifySessionExpired } from "./session";
 
 async function request(path, { token, method = "GET", body } = {}) {
   const headers = {};
@@ -18,7 +19,10 @@ async function request(path, { token, method = "GET", body } = {}) {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.message || `Request failed (${response.status})`);
+    if (response.status === 401) notifySessionExpired();
+    const error = new Error(data.message || `Request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -89,7 +93,10 @@ export async function streamConversationMessage(
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.message || `Request failed (${response.status})`);
+    if (response.status === 401) notifySessionExpired();
+    const error = new Error(data.message || `Request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
   }
   if (!response.body) throw new Error("The backend returned no streaming response body");
 

@@ -15,6 +15,7 @@ A typical request travels from the authenticated React chat to Express, which ve
 ## Features
 
 - User registration and login with JWT authentication
+- Authenticated profile retrieval and account session validation
 - General, conversational learning answers
 - Website scraping and indexing for source-informed answers
 - Topic selection for website-based learning
@@ -52,6 +53,8 @@ PORT=3000
 MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>/<database>
 JWT_SECRET=replace-with-a-long-random-secret
 AI_SERVICE_URL=http://127.0.0.1:8000
+AI_SERVICE_TOKEN=use-the-same-long-random-value-as-ai-services
+APP_ENV=development
 CONVERSATION_HISTORY_TOKEN_THRESHOLD=6000
 CONVERSATION_SUMMARY_TARGET_TOKENS=800
 CONVERSATION_SUMMARY_INPUT_TOKEN_LIMIT=12000
@@ -65,6 +68,8 @@ AI service: `ai_services/.env` (copy `ai_services/.env.example`):
 ```dotenv
 GROQ_API_KEY=your-groq-api-key
 FIRECRAWL_API_KEY=replace-with-your-firecrawl-api-key
+AI_SERVICE_TOKEN=use-the-same-long-random-value-as-backend
+APP_ENV=development
 UPSTASH_REDIS_REST_URL=https://<your-database>.upstash.io
 UPSTASH_REDIS_REST_TOKEN=replace-with-your-upstash-token
 MODEL_CONTEXT_TOKEN_LIMIT=16384
@@ -97,7 +102,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-The AI service exposes `GET /health` and `POST /analyze-query`. The same POST endpoint accepts normal JSON, streaming requests, and summary operations.
+The AI service exposes `GET /health` and `POST /analyze-query`. The same POST endpoint accepts normal JSON, streaming requests, and summary operations. In local development, set the same `AI_SERVICE_TOKEN` in both services to require backend-to-AI Bearer authentication. Production requires this token and fails closed when it is missing; the Render Blueprint shares a generated secret with the backend and AI service.
 
 **2. Backend API**
 
@@ -124,12 +129,30 @@ Open the local URL printed by Vite in the terminal.
 `render.yaml` defines Render web services for the backend and AI API. Review the service names before syncing the Blueprint so it associates with your existing Render services rather than creating unintended duplicates. Add secret values in Render's environment settings; do not put credentials in `render.yaml`.
 
 - Set backend `MONGODB_URI`, `JWT_SECRET`, and `AI_SERVICE_URL` to the public AI API URL.
+- The Render Blueprint generates a shared `AI_SERVICE_TOKEN` for the backend-to-AI request. Set the same secret manually on both services if deploying outside that Blueprint. The AI API rejects unauthenticated `/analyze-query` requests in production.
 - Set the AI service's `GROQ_API_KEY`, `FIRECRAWL_API_KEY`, and Upstash Redis credentials.
 - If the frontend stays on Vercel, set its `VITE_API_URL` to the public backend URL. Vercel serves Functions on demand; it does not use an app-selected `PORT` for FastAPI.
 - Ensure all proxy layers pass `text/event-stream` without buffering. Express and FastAPI send `Cache-Control: no-transform` and `X-Accel-Buffering: no` for streaming responses.
 - Check AI `GET /health`, backend `GET /api/health`, and Mongo readiness via `GET /api/health/ready`.
 
 Render supplies `PORT`; its FastAPI start command binds to `0.0.0.0:$PORT`.
+
+## API Contracts
+
+The frontend sends authenticated requests to Express with `Authorization: Bearer <JWT>`. Express derives the account ID from that token; clients cannot choose a conversation owner.
+
+| Route | Authentication | Request / response |
+| --- | --- | --- |
+| `POST /api/auth/register` | No | `{ name, email, password }`; creates a bcrypt-hashed account and returns safe `{ id, name, email }` fields. |
+| `POST /api/auth/login` | No | `{ email, password }`; returns a one-day JWT and safe user fields. |
+| `GET /api/auth/profile` | Bearer JWT | Returns the authenticated account's `{ id, name, email, createdAt }` fields. |
+| `GET /api/conversations` | Bearer JWT | Returns only the caller's saved conversations, newest first. |
+| `POST /api/conversations` | Bearer JWT | Optional `{ title }`; creates a caller-owned conversation. |
+| `GET /api/conversations/:id` | Bearer JWT | Returns an owned conversation and its persisted messages. |
+| `DELETE /api/conversations/:id` | Bearer JWT | Deletes an owned conversation and its messages. |
+| `POST /api/conversations/:id/messages` | Bearer JWT | Sends a learning turn. The frontend uses SSE with `{ message, stream: true, requestId, selectedTopic? }`. |
+
+Express calls FastAPI `POST /analyze-query` with `query`, `conversation_history`, `conversation_summary`, `source_url`, `selected_topic`, and optional `stream` or `operation: "summarize"` fields. Normal JSON responses include the result and available topic/source metadata. Streaming responses send `token`, `done`, and `error` events. In production, Express authenticates this internal request with the shared `AI_SERVICE_TOKEN`.
 
 ## Streaming API
 

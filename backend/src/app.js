@@ -33,5 +33,17 @@ app.use("/api/auth", authRoutes);
 
 app.use("/api/conversations", conversationRoutes);
 
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 500
+    ? error.status
+    : 500;
+  if (status === 500) console.error("Unhandled API error:", error.message);
+  return res.status(status).json({
+    success: false,
+    message: status === 400 ? "Invalid request body" : "The request could not be completed",
+  });
+});
+
 export default app;
 

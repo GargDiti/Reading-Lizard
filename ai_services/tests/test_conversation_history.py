@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from main import QueryRequest, analyze_query
+from main import QueryRequest, analyze_query, require_backend_token
 from services.groq_service import (
     _format_retrieved_chunks,
     _prompt_budgets,
@@ -28,6 +28,22 @@ class ConversationHistoryTests(unittest.TestCase):
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=answer))]
         )
+
+    def test_internal_ai_endpoint_requires_matching_backend_token_when_configured(self):
+        with patch.dict("os.environ", {"AI_SERVICE_TOKEN": "shared-test-token", "APP_ENV": "production"}):
+            with self.assertRaises(Exception) as missing:
+                require_backend_token(None)
+            self.assertEqual(getattr(missing.exception, "status_code", None), 401)
+            with self.assertRaises(Exception) as incorrect:
+                require_backend_token("Bearer wrong-token")
+            self.assertEqual(getattr(incorrect.exception, "status_code", None), 401)
+            self.assertIsNone(require_backend_token("Bearer shared-test-token"))
+
+    def test_production_ai_endpoint_fails_closed_without_internal_token(self):
+        with patch.dict("os.environ", {"APP_ENV": "production"}, clear=True):
+            with self.assertRaises(Exception) as missing_configuration:
+                require_backend_token("Bearer anything")
+            self.assertEqual(getattr(missing_configuration.exception, "status_code", None), 503)
 
     def test_general_groq_prompt_receives_conversation_history(self):
         with patch(

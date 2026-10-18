@@ -38,10 +38,13 @@ function ResearchPage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const composerRef = useRef(null);
   const autoStartRef = useRef(false);
   const submitMessageRef = useRef(null);
   const activeStreamRef = useRef(null);
+  const autoOpenConversationRef = useRef(null);
+  const openConversationRef = useRef(null);
 
   useEffect(() => () => activeStreamRef.current?.abort(), []);
 
@@ -81,6 +84,14 @@ function ResearchPage() {
     void submitMessageRef.current(initialDraft);
   }, [location.pathname, location.state, loadingList, token, navigate]);
 
+  useEffect(() => {
+    const conversationId = location.state?.conversationId;
+    if (!conversationId || loadingList || !token || autoOpenConversationRef.current === conversationId) return;
+    autoOpenConversationRef.current = conversationId;
+    navigate(location.pathname, { replace: true, state: null });
+    void openConversationRef.current(conversationId);
+  }, [location.pathname, location.state, loadingList, token, navigate]);
+
   async function openConversation(conversationId) {
     activeStreamRef.current?.abort();
     setLoadingConversation(true);
@@ -100,6 +111,7 @@ function ResearchPage() {
       setLoadingConversation(false);
     }
   }
+  openConversationRef.current = openConversation;
 
   async function startNewConversation() {
     activeStreamRef.current?.abort();
@@ -257,7 +269,7 @@ function ResearchPage() {
     <div className="research-page">
       <Navbar />
       <div className="research-shell">
-        <aside className="research-sidebar" aria-label="Saved conversations">
+        <aside className={`research-sidebar${sidebarOpen ? "" : " sidebar-collapsed"}`} aria-label="Saved conversations">
           <div className="research-sidebar-head">
             <div>
               <p className="research-eyebrow">YOUR WORKSPACE</p>
@@ -270,7 +282,7 @@ function ResearchPage() {
           <button className="sidebar-new-button" onClick={startNewConversation}>
             <span aria-hidden="true">＋</span> New research
           </button>
-          <div className="conversation-list-label">RECENT</div>
+          <div id="research-sidebar-list"><div className="conversation-list-label">RECENT</div>
           {loadingList ? (
             <p className="sidebar-empty">Loading saved research…</p>
           ) : conversations.length ? (
@@ -287,7 +299,7 @@ function ResearchPage() {
             </div>
           ) : (
             <p className="sidebar-empty">Your saved research will appear here.</p>
-          )}
+          )}</div>
           <div className="sidebar-footnote">
             <img src={logo} alt="" />
             <span>Reading Lizard<br /><small>Research that remembers.</small></span>
@@ -297,7 +309,7 @@ function ResearchPage() {
         <main className="research-main">
           <div className="research-main-topline">
             <div>
-              <p className="research-eyebrow">AI RESEARCH MODE</p>
+              <div className="workspace-label-row"><button className="sidebar-toggle" type="button" onClick={() => setSidebarOpen((open) => !open)} aria-expanded={sidebarOpen} aria-controls="research-sidebar-list" aria-label={sidebarOpen ? "Collapse research sidebar" : "Expand research sidebar"}>☰</button><p className="research-eyebrow">AI RESEARCH MODE</p></div>
               <h2>{conversation?.title || "What are you curious about?"}</h2>
             </div>
             {conversation?.sourceUrl && <span className="source-indicator" title={conversation.sourceUrl}>Website source attached</span>}
@@ -319,7 +331,7 @@ function ResearchPage() {
                       {message.status === "incomplete" && " · Incomplete"}
                     </span>
                     <div className="message-content">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>, pre: ({ children }) => <pre className="message-code">{children}</pre> }}>
                         {message.content}
                       </ReactMarkdown>
                     </div>

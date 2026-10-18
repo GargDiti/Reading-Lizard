@@ -3,83 +3,43 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import "./ResearchCard.css";
 
-const CHIPS = [
-  {
-    icon: "⌖",
-    title: "Page sections",
-    subtitle: "Choose a topic or whole page",
-  },
-  {
-    icon: "✦",
-    title: "Source-grounded answers",
-    subtitle: "Retrieved from your link",
-  },
-  {
-    icon: "↺",
-    title: "Saved conversations",
-    subtitle: "Pick up where you left off",
-  },
+const EXAMPLES = [
+  "How does retrieval augmented generation work?",
+  "Compare vector search and keyword search",
+  "Explain JavaScript closures simply",
 ];
 
 function ResearchCard() {
-  const [url, setUrl] = useState("");
+  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState("website");
   const navigate = useNavigate();
   const { isAuthenticated } = useAuth();
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    const query = url.trim();
-    if (!query) return;
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    const draft = query.trim();
+    if (!draft) return;
     navigate(isAuthenticated ? "/research" : "/login", {
-      state: isAuthenticated
-        ? { draft: query }
-        : { from: { pathname: "/research", state: { draft: query } } },
+      state: isAuthenticated ? { draft } : { from: { pathname: "/research", state: { draft } } },
     });
   };
 
   return (
     <div className="research-card-wrap">
-      <span className="research-card-badge">✦ AI Research Mode</span>
-
-      <div className="research-card">
-        <>
-            <h3 className="research-card-title">
-              Start your research <span>🦎</span>
-            </h3>
-              <p className="research-card-subtitle">
-                Ask a question or bring a page to explore
-            </p>
-
-            <form className="research-card-form" onSubmit={handleSubmit}>
-              <div className="research-card-input">
-                <span className="research-card-input-icon">🔗</span>
-                <input
-                  type="text"
-                  placeholder="Paste a link or ask a question..."
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                />
-              </div>
-
-              <button type="submit" className="research-card-cta">
-                Start Exploring
-                <span aria-hidden="true">→</span>
-              </button>
-            </form>
-
-            <div className="research-card-chips">
-              {CHIPS.map((chip) => (
-                <div className="research-chip" key={chip.title}>
-                  <span className="research-chip-icon">{chip.icon}</span>
-                  <div>
-                    <p className="research-chip-title">{chip.title}</p>
-                    <p className="research-chip-subtitle">{chip.subtitle}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-        </>
-      </div>
+      <form className="research-card" onSubmit={handleSubmit}>
+        <div className="research-mode-tabs" role="tablist" aria-label="Research input type">
+          <button type="button" role="tab" aria-selected={mode === "website"} className={mode === "website" ? "active" : ""} onClick={() => setMode("website")}><span aria-hidden="true">↗</span> Website URL</button>
+          <button type="button" role="tab" aria-selected={mode === "question"} className={mode === "question" ? "active" : ""} onClick={() => setMode("question")}><span aria-hidden="true">◌</span> Ask a question</button>
+        </div>
+        <label className="research-input-label" htmlFor="research-prompt">{mode === "website" ? "Paste a page link to research" : "What would you like to understand?"}</label>
+        <div className="research-input-row">
+          <span className="research-input-icon" aria-hidden="true">{mode === "website" ? "↗" : "⌕"}</span>
+          <textarea id="research-prompt" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={mode === "website" ? "Paste a link or ask anything you want to understand…" : "Ask a question or explore a concept…"} rows={2} maxLength={20000} />
+          <button className="research-submit" type="submit" disabled={!query.trim()}>{mode === "website" ? "Start researching" : "Ask Reading Lizard"}<span aria-hidden="true">→</span></button>
+        </div>
+        <div className="research-card-assurance"><span aria-hidden="true">✓</span> Answers grounded in sources <i /> Links are detected automatically</div>
+      </form>
+      <div className="research-examples"><span>TRY ASKING</span>{EXAMPLES.map((example) => <button key={example} type="button" onClick={() => { setMode("question"); setQuery(example); }}>{example}</button>)}</div>
     </div>
   );
 }

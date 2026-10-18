@@ -22,6 +22,17 @@ function getAIServiceUrl() {
   return serviceUrl.toString();
 }
 
+function getAIServiceHeaders(accept) {
+  const token = process.env.AI_SERVICE_TOKEN?.trim();
+  if (process.env.NODE_ENV === "production" && !token) {
+    throw new Error("AI_SERVICE_TOKEN must be configured for the production AI service");
+  }
+  const headers = { "Content-Type": "application/json" };
+  if (accept) headers.Accept = accept;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
 function requestBody({
   query,
   conversationHistory,
@@ -68,7 +79,7 @@ async function generateAnswer({
   const serviceUrl = getAIServiceUrl();
   const response = await fetch(serviceUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAIServiceHeaders(),
     body: JSON.stringify(requestBody({
       query,
       conversationHistory,
@@ -94,7 +105,7 @@ async function generateAnswer({
 async function generateSummary({ existingSummary, messages, targetTokens }) {
   const response = await fetch(getAIServiceUrl(), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAIServiceHeaders(),
     body: JSON.stringify(requestBody({
       query: "Update the rolling conversation summary",
       operation: "summarize",
@@ -119,10 +130,7 @@ async function generateSummary({ existingSummary, messages, targetTokens }) {
 async function* streamAnswer(payload, { signal } = {}) {
   const response = await fetch(getAIServiceUrl(), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    },
+    headers: getAIServiceHeaders("text/event-stream"),
     body: JSON.stringify(requestBody({ ...payload, stream: true })),
     signal: signal || AbortSignal.timeout(Number(process.env.AI_STREAM_TIMEOUT_MS) || 180000),
   });

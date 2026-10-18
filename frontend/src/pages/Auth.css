@@ -369,3 +369,19 @@
     padding: 30px 22px 26px;
   }
 }
+
+.auth-page { background:#fafbf8; }
+.auth-topbar { border-bottom:1px solid #e5e9e5; background:#fafbf8; }
+.auth-body { min-height:calc(100vh - 81px); }
+.auth-visual { background:#254f3a; }
+.auth-visual h1 { color:#f7faf6; font-family:Manrope,"DM Sans",sans-serif; font-weight:600; letter-spacing:-.035em; }
+.auth-visual h1 .accent { color:#c3d7c6; }
+.auth-visual p { color:#d4e0d6; }
+.auth-visual-leaf { display:none; }
+.auth-visual-lizard { right:4%; left:auto; bottom:-36px; width:clamp(150px,19vw,230px); opacity:.32; filter:grayscale(.25); }
+.auth-card { max-width:430px; border:1px solid #e7ebe7; border-radius:12px; box-shadow:0 12px 40px rgba(29,43,33,.06); }
+.auth-card-icon { border-radius:9px; background:#254f3a; box-shadow:none; }
+.auth-submit { border-radius:7px; background:#254f3a; }
+.auth-submit:hover:not(:disabled) { background:#183c2a; }
+.auth-link,.auth-topbar-switch a { color:#315b41; }
+.auth-input { border-radius:7px; background:#fafbf9; }

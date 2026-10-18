@@ -4,7 +4,7 @@ import test from "node:test";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-import { login, register } from "../src/controllers/authcontroller.js";
+import { getProfile, login, register } from "../src/controllers/authcontroller.js";
 import {
   createConversation,
   deleteConversation,
@@ -102,6 +102,37 @@ test("production AI requests require a non-local deployed service URL", async (t
   );
 });
 
+test("production AI requests require and forward the shared internal service token", async (t) => {
+  const priorNodeEnv = process.env.NODE_ENV;
+  const priorServiceUrl = process.env.AI_SERVICE_URL;
+  const priorServiceToken = process.env.AI_SERVICE_TOKEN;
+  process.env.NODE_ENV = "production";
+  process.env.AI_SERVICE_URL = "https://reading-lizard-ai.example.com";
+  delete process.env.AI_SERVICE_TOKEN;
+  t.after(() => {
+    if (priorNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = priorNodeEnv;
+    if (priorServiceUrl === undefined) delete process.env.AI_SERVICE_URL;
+    else process.env.AI_SERVICE_URL = priorServiceUrl;
+    if (priorServiceToken === undefined) delete process.env.AI_SERVICE_TOKEN;
+    else process.env.AI_SERVICE_TOKEN = priorServiceToken;
+  });
+
+  await assert.rejects(
+    generateAnswer({ query: "test" }),
+    /AI_SERVICE_TOKEN must be configured/,
+  );
+
+  process.env.AI_SERVICE_TOKEN = "shared-test-token";
+  let authHeader;
+  stub(t, globalThis, "fetch", async (_url, options) => {
+    authHeader = options.headers.Authorization;
+    return { ok: true, json: async () => ({ result: "Safe response" }) };
+  });
+  await generateAnswer({ query: "test" });
+  assert.equal(authHeader, "Bearer shared-test-token");
+});
+
 test("register hashes passwords and login returns a JWT accepted by auth middleware", async (t) => {
   const priorSecret = process.env.JWT_SECRET;
   process.env.JWT_SECRET = "test-only-jwt-secret";
@@ -163,6 +194,24 @@ test("register hashes passwords and login returns a JWT accepted by auth middlew
     () => {},
   );
   assert.equal(authenticatedRequest.user.id, userId);
+});
+
+test("profile endpoint returns only the authenticated user's public account fields", async (t) => {
+  let selectedFields;
+  stub(t, User, "findById", (id) => {
+    assert.equal(id, userId);
+    return { select: async (fields) => {
+      selectedFields = fields;
+      return { _id: userId, name: "A Student", email: "student@example.com", createdAt: new Date("2026-01-01") };
+    } };
+  });
+  const response = mockResponse();
+  await getProfile({ user: { id: userId } }, response, (error) => { throw error; });
+  assert.equal(response.statusCode, 200);
+  assert.equal(selectedFields, "name email createdAt");
+  assert.equal(response.body.user.name, "A Student");
+  assert.equal(response.body.user.email, "student@example.com");
+  assert.equal("password" in response.body.user, false);
 });
 
 test("auth middleware rejects missing and invalid JWTs", () => {
