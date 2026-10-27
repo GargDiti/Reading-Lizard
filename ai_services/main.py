@@ -12,6 +12,7 @@ from services.url_detector import extract_url
 from services.query_router import classify_query
 from services.handlers import dispatch, prepare_website_learning, stream_dispatch
 from services.groq_service import summarize_conversation
+from services.vector_store import get_indexed_topics
 
 app = FastAPI()
 logger = logging.getLogger(__name__)
@@ -125,6 +126,9 @@ def analyze_query(request: QueryRequest):
             request.summary_target_tokens,
         )
         return {"summary": summary}
+
+    if request.operation == "get_indexed_topics":
+        return {"topics": get_indexed_topics(request.source_url or "")}
 
     if request.stream:
         return StreamingResponse(

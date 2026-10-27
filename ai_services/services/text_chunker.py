@@ -23,6 +23,7 @@ def chunk_markdown(
 
     sections = []
     current_title = "Introduction"
+    current_level = 1
     current_lines = []
 
     # Split the document at Markdown headings.
@@ -32,22 +33,23 @@ def chunk_markdown(
         if heading:
             if current_lines:
                 sections.append(
-                    (current_title, "\n".join(current_lines).strip())
+                    (current_title, current_level, "\n".join(current_lines).strip())
                 )
 
             current_title = clean_topic_title(heading.group(2))
+            current_level = len(heading.group(1))
             current_lines = []
         else:
             current_lines.append(line)
 
     if current_lines:
         sections.append(
-            (current_title, "\n".join(current_lines).strip())
+            (current_title, current_level, "\n".join(current_lines).strip())
         )
 
     chunks = []
 
-    for title, section_text in sections:
+    for title, section_level, section_text in sections:
         if not section_text:
             continue
 
@@ -90,6 +92,7 @@ def chunk_markdown(
                 if current_text:
                     chunks.append({
                         "section_title": title,
+                        "section_level": section_level,
                         "text": current_text,
                     })
 
@@ -110,6 +113,7 @@ def chunk_markdown(
         if current_text:
             chunks.append({
                 "section_title": title,
+                "section_level": section_level,
                 "text": current_text,
             })
 

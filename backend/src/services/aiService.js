@@ -127,6 +127,22 @@ async function generateSummary({ existingSummary, messages, targetTokens }) {
   return result.summary.trim();
 }
 
+async function getIndexedTopics(sourceUrl) {
+  const response = await fetch(getAIServiceUrl(), {
+    method: "POST",
+    headers: getAIServiceHeaders(),
+    body: JSON.stringify(requestBody({
+      query: "Retrieve topics from this indexed source",
+      sourceUrl,
+      operation: "get_indexed_topics",
+    })),
+    signal: AbortSignal.timeout(Number(process.env.AI_REQUEST_TIMEOUT_MS) || 180000),
+  });
+  if (!response.ok) throw new Error(`AI service returned HTTP ${response.status}`);
+  const result = await response.json();
+  return Array.isArray(result.topics) ? result.topics : [];
+}
+
 async function* streamAnswer(payload, { signal } = {}) {
   const response = await fetch(getAIServiceUrl(), {
     method: "POST",
@@ -182,7 +198,7 @@ async function* streamAnswer(payload, { signal } = {}) {
   }
 }
 
-const aiService = { generateAnswer, generateSummary, streamAnswer };
+const aiService = { generateAnswer, generateSummary, getIndexedTopics, streamAnswer };
 
-export { aiService, generateAnswer, generateSummary, streamAnswer };
+export { aiService, generateAnswer, generateSummary, getIndexedTopics, streamAnswer };
 export default aiService;

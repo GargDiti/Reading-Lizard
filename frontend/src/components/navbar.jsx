@@ -13,7 +13,16 @@ function Navbar() {
   const { isAuthenticated, authReady, user, logout } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const menuRef = useRef(null);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -39,15 +48,18 @@ function Navbar() {
   const displayName = user?.name || user?.email || "Reader";
 
   return (
-    <nav className="navbar" aria-label="Main navigation">
+    <nav className={`navbar${mobileOpen ? " mobile-open" : ""}${scrolled ? " is-scrolled" : ""}`} aria-label="Main navigation">
       <Link to="/" className="logo-section"><img className="logo-icon" src={logo} alt="Reading Lizard" /></Link>
-      <div className="nav-links">
-        <Link to="/#features">Features</Link>
-        <Link to="/#how-it-works">How it works</Link>
-        <Link to="/#about">About</Link>
+      <button className="nav-toggle" type="button" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} aria-controls="primary-nav-links" onClick={() => setMobileOpen((open) => !open)}><span /><span /><span /></button>
+      <div className="nav-links" id="primary-nav-links">
+        <Link to="/#features" onClick={() => setMobileOpen(false)}>Features</Link>
+        <Link to="/#how-it-works" onClick={() => setMobileOpen(false)}>How it works</Link>
+        <Link to="/#faq" onClick={() => setMobileOpen(false)}>FAQs</Link>
       </div>
       <div className="nav-buttons">
         {!authReady && isAuthenticated ? <span className="nav-auth-pending" role="status">Checking session…</span> : isAuthenticated ? (
+          <>
+          <Link className="signup-btn nav-primary-cta" to="/research">My research <span aria-hidden="true">→</span></Link>
           <div className="profile-menu" ref={menuRef}>
             <button className="profile-menu-trigger" type="button" aria-haspopup="menu" aria-expanded={menuOpen} aria-controls="profile-menu-items" onClick={() => setMenuOpen((open) => !open)}>
               <span className="profile-avatar" aria-hidden="true">{getInitials(user?.name, user?.email)}</span>
@@ -61,10 +73,11 @@ function Navbar() {
               <button role="menuitem" type="button" onClick={handleLogout}>Log out</button>
             </div>}
           </div>
+          </>
         ) : (
           <>
-            <button className="login-btn" onClick={() => navigate("/login")}>Sign in</button>
-            <button className="signup-btn" onClick={() => navigate("/signup")}>Get started</button>
+            <button className="login-btn" onClick={() => { setMobileOpen(false); navigate("/login"); }}>Sign in</button>
+            <button className="signup-btn" onClick={() => { setMobileOpen(false); navigate("/signup"); }}>Get started <span aria-hidden="true">→</span></button>
           </>
         )}
       </div>

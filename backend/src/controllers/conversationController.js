@@ -59,11 +59,25 @@ const getConversation = async (req, res) => {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
 
-    const messages = await Message.find({ conversationId: found.conversation._id })
+    const conversation = found.conversation;
+    if (!conversation.availableTopics?.length && conversation.sourceUrl) {
+      try {
+        const recoveredTopics = await aiService.getIndexedTopics(conversation.sourceUrl);
+        if (recoveredTopics.length) {
+          conversation.availableTopics = recoveredTopics;
+          conversation.allowWholeWebsite = true;
+          await conversation.save();
+        }
+      } catch (error) {
+        console.warn("[CONVERSATION] Could not recover indexed topics:", error.message);
+      }
+    }
+
+    const messages = await Message.find({ conversationId: conversation._id })
       .sort({ createdAt: 1, _id: 1 });
     return res.status(200).json({
       success: true,
-      conversation: found.conversation,
+      conversation,
       messages,
     });
   } catch (error) {
@@ -342,9 +356,15 @@ async function sendStreamingMessage(req, res) {
           if (item.data.url && !found.conversation.sourceUrl) {
             updates.sourceUrl = item.data.url;
           }
-          updates.awaitingTopicSelection = item.data.awaiting_topic_selection === true;
-          updates.allowWholeWebsite = item.data.allow_whole_website === true;
-          if (Array.isArray(item.data.topics)) updates.availableTopics = item.data.topics;
+          const responseTopics = Array.isArray(item.data.topics) && item.data.topics.length
+            ? item.data.topics
+            : (found.conversation.availableTopics || []);
+          const awaitingTopicSelection = item.data.awaiting_topic_selection === true;
+          const allowWholeWebsite = item.data.allow_whole_website === true
+            || found.conversation.allowWholeWebsite === true;
+          updates.awaitingTopicSelection = awaitingTopicSelection;
+          updates.allowWholeWebsite = allowWholeWebsite;
+          updates.availableTopics = responseTopics;
           await Conversation.updateOne(
             { _id: found.conversation._id, userId: req.user.id },
             { $set: { ...updates, updatedAt: new Date() } },
@@ -355,9 +375,9 @@ async function sendStreamingMessage(req, res) {
             conversationId: found.conversation._id,
             message: { ...assistantMessage.toObject(), content: fullResponse, status: "complete" },
             sourceUrl: item.data.url || found.conversation.sourceUrl || null,
-            topics: item.data.topics || [],
-            awaitingTopicSelection: item.data.awaiting_topic_selection === true,
-            allowWholeWebsite: item.data.allow_whole_website === true,
+            topics: responseTopics,
+            awaitingTopicSelection,
+            allowWholeWebsite,
           });
           break;
         }
@@ -479,11 +499,15 @@ const sendMessage = async (req, res) => {
     if (aiResult.url && !conversation.sourceUrl) {
       updates.sourceUrl = aiResult.url;
     }
-    updates.awaitingTopicSelection = aiResult.awaiting_topic_selection === true;
-    updates.allowWholeWebsite = aiResult.allow_whole_website === true;
-    if (Array.isArray(aiResult.topics)) {
-      updates.availableTopics = aiResult.topics;
-    }
+    const responseTopics = Array.isArray(aiResult.topics) && aiResult.topics.length
+      ? aiResult.topics
+      : (conversation.availableTopics || []);
+    const awaitingTopicSelection = aiResult.awaiting_topic_selection === true;
+    const allowWholeWebsite = aiResult.allow_whole_website === true
+      || conversation.allowWholeWebsite === true;
+    updates.awaitingTopicSelection = awaitingTopicSelection;
+    updates.allowWholeWebsite = allowWholeWebsite;
+    updates.availableTopics = responseTopics;
     if (Object.keys(updates).length) {
       await Conversation.updateOne({ _id: conversation._id }, { $set: updates });
     } else {
@@ -495,9 +519,9 @@ const sendMessage = async (req, res) => {
       conversationId: conversation._id,
       message: assistantMessage,
       sourceUrl: aiResult.url || conversation.sourceUrl || null,
-      topics: aiResult.topics || [],
-      awaitingTopicSelection: aiResult.awaiting_topic_selection === true,
-      allowWholeWebsite: aiResult.allow_whole_website === true,
+      topics: responseTopics,
+      awaitingTopicSelection,
+      allowWholeWebsite,
     });
   } catch (error) {
     console.error("[MESSAGE] Could not process message:", error.message);
