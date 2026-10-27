@@ -6,6 +6,7 @@ import ResearchCard from "./ResearchCard";
 import ResearchVisual from "./ResearchVisual";
 import SpotlightCard from "./reactbits/SpotlightCard";
 import AnimatedContent from "./reactbits/AnimatedContent";
+import { StatsRow } from "./LandingSections";
 import "./Hero.css";
 
 const RECENT_LIMIT = 3;
@@ -60,11 +61,12 @@ function RecentResearch({ token, isAuthenticated }) {
       {status === "ready" && recent.length > 0 && <div className="recent-grid">{recent.map((item, index) => (
         <AnimatedContent key={item._id}><SpotlightCard className="recent-card" spotlightColor="rgba(50, 106, 72, 0.08)">
           <Link to="/research" state={{ conversationId: item._id }} className="recent-card-link" aria-label={`Open research: ${item.title || "Untitled research"}`}>
-            <span className={`recent-card-symbol recent-symbol-${index}`} aria-hidden="true">{item.sourceUrl ? "↗" : "▤"}</span>
-            <span className="recent-card-date">{formatRelativeDate(item.updatedAt || item.createdAt)}</span>
-            <strong className="recent-card-title">{item.title || "Untitled research"}</strong>
-            <span className="recent-card-source" title={item.sourceUrl || "Learning conversation"}>{getSourceLabel(item.sourceUrl)}</span>
-            <span className="recent-card-meta">{item.sourceUrl ? "Website research" : "Learning session"}{Array.isArray(item.availableTopics) && item.availableTopics.length > 0 ? ` · ${item.availableTopics.length} topics` : ""}</span>
+            <span className={`recent-card-art recent-art-${index}`} aria-hidden="true"><span className="recent-art-orbit" /><span className="recent-card-symbol">{item.sourceUrl ? "↗" : "▤"}</span><span className="recent-art-caption">READING LIZARD <i>✳</i></span></span>
+            <span className="recent-card-body">
+              <span className="recent-card-overline">{item.sourceUrl ? "WEB RESEARCH" : "LEARNING SESSION"}<span>{formatRelativeDate(item.updatedAt || item.createdAt)}</span></span>
+              <strong className="recent-card-title">{item.title || "Untitled research"}</strong>
+              <span className="recent-card-foot"><span className="recent-card-source" title={item.sourceUrl || "Learning conversation"}>{getSourceLabel(item.sourceUrl)}</span><span className="recent-card-arrow" aria-hidden="true">↗</span></span>
+            </span>
           </Link>
         </SpotlightCard></AnimatedContent>
       ))}</div>}
@@ -81,7 +83,7 @@ function Hero() {
   const { token, isAuthenticated } = useAuth();
   return (
     <>
-      <section className="hero" id="how-it-works">
+      <section className="hero" id="top">
         <div className="hero-layout">
           <div className="hero-content">
             <span className="hero-kicker"><span /> YOUR PERSONAL WEB RESEARCH COMPANION</span>
@@ -92,6 +94,7 @@ function Hero() {
           <ResearchVisual />
         </div>
       </section>
+      <StatsRow />
       <RecentResearch token={token} isAuthenticated={isAuthenticated} />
     </>
   );

@@ -68,7 +68,6 @@ async function register(req, res, next) {
       email: normalizedEmail,
       password: hashedPassword,
     });
-
     // 7. Return safe user details
     return res.status(201).json({
       success: true,
@@ -161,4 +160,4 @@ async function login(req, res, next) {
   }
 }
 
-export { register, login, getProfile };
+export {register, login, getProfile };

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -21,6 +21,97 @@ function formatDate(value) {
   }).format(new Date(value));
 }
 
+function buildTopicTree(topics) {
+  const roots = [];
+  const ancestors = [];
+  topics.forEach((topic, index) => {
+    const level = Math.min(3, Math.max(1, Number(topic.level) || 1));
+    const title = String(topic.title || "").trim().replace(/\s+/g, " ");
+    if (!title) return;
+    while (ancestors.length && ancestors[ancestors.length - 1].level >= level) ancestors.pop();
+    const parent = ancestors[ancestors.length - 1] || null;
+    const siblings = parent ? parent.children : roots;
+    const existing = siblings.find((item) => item.title.toLocaleLowerCase() === title.toLocaleLowerCase());
+    const node = existing || { ...topic, title, level, key: `${level}-${index}-${title}`, children: [] };
+    if (!existing) siblings.push(node);
+    ancestors.push(node);
+  });
+  return roots;
+}
+
+function filterTopicTree(nodes, query) {
+  if (!query) return nodes;
+  const normalizedQuery = query.toLocaleLowerCase();
+  return nodes.reduce((matches, node) => {
+    const children = filterTopicTree(node.children, query);
+    if (node.title.toLocaleLowerCase().includes(normalizedQuery) || children.length) {
+      matches.push({ ...node, children });
+    }
+    return matches;
+  }, []);
+}
+
+function countTopicTree(nodes) {
+  return nodes.reduce((total, node) => total + 1 + countTopicTree(node.children), 0);
+}
+
+function TopicTreeNode({ node, expandedTopics, onToggle, selectedTopic, onSelect, onAsk, searchActive }) {
+  const isExpanded = searchActive || expandedTopics.has(node.key);
+  const hasChildren = node.children.length > 0;
+  const handleKeyDown = (event) => {
+    const currentItem = event.currentTarget.closest("[role='treeitem']");
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const buttons = Array.from(currentItem.closest("[role='tree']").querySelectorAll("button[data-topic-key]"))
+        .filter((button) => button.getClientRects().length > 0);
+      const currentIndex = buttons.indexOf(event.currentTarget);
+      const nextIndex = event.key === "ArrowDown"
+        ? Math.min(buttons.length - 1, currentIndex + 1)
+        : Math.max(0, currentIndex - 1);
+      buttons[nextIndex]?.focus();
+    } else if (event.key === "ArrowRight" && hasChildren) {
+      event.preventDefault();
+      if (!isExpanded) onToggle(node.key);
+      else currentItem.querySelector(":scope > ul button[data-topic-key]")?.focus();
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      if (hasChildren && isExpanded) onToggle(node.key);
+      else currentItem.parentElement.closest("[role='treeitem']")?.querySelector(":scope > .topic-row button[data-topic-key]")?.focus();
+    }
+  };
+  return (
+    <li className={`topic-tree-node level-${node.level}`} role="treeitem" aria-expanded={hasChildren ? isExpanded : undefined}>
+      <div className={`topic-row${selectedTopic === node.title ? " is-active" : ""}`}>
+        <button
+          className={`topic-expand-toggle${isExpanded ? " is-open" : ""}`}
+          type="button"
+          aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.title}`}
+          aria-expanded={isExpanded}
+          tabIndex={hasChildren ? 0 : -1}
+          onKeyDown={handleKeyDown}
+          onClick={() => hasChildren && onToggle(node.key)}
+        >{hasChildren ? "›" : ""}</button>
+        <button
+          className={`topic-option level-${node.level}${hasChildren ? " has-children" : ""}${selectedTopic === node.title ? " selected" : ""}`}
+          title={node.title}
+          aria-current={selectedTopic === node.title ? "true" : undefined}
+          data-topic-key={node.key}
+          onKeyDown={handleKeyDown}
+          onClick={() => onSelect(node.title)}
+        >
+          <span className="topic-title">{node.title}</span>
+        </button>
+        <button className="topic-ask-button" type="button" title={`Ask about ${node.title}`} aria-label={`Ask about ${node.title}`} onClick={() => onAsk(node.title)}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H8l-4 2v-5a7.5 7.5 0 1 1 16-4.5Z" /><path d="M9.8 9.5a2.3 2.3 0 1 1 3.7 1.8c-.9.6-1.5 1.1-1.5 2.2M12 16.4v.1" /></svg>
+        </button>
+      </div>
+      {hasChildren && isExpanded && <ul className="topic-children" role="group">
+        {node.children.map((child) => <TopicTreeNode key={child.key} node={child} expandedTopics={expandedTopics} onToggle={onToggle} selectedTopic={selectedTopic} onSelect={onSelect} onAsk={onAsk} searchActive={searchActive} />)}
+      </ul>}
+    </li>
+  );
+}
+
 function ResearchPage() {
   const { token } = useAuth();
   const location = useLocation();
@@ -39,7 +130,38 @@ function ResearchPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [topicDrawerOpen, setTopicDrawerOpen] = useState(false);
+  const [topicSearch, setTopicSearch] = useState("");
+  const [expandedTopics, setExpandedTopics] = useState(() => new Set());
+  const topicSearchRef = useRef(null);
+  const topicTree = useMemo(() => buildTopicTree(topics), [topics]);
+  const visibleTopicTree = useMemo(() => filterTopicTree(topicTree, topicSearch.trim()), [topicTree, topicSearch]);
+  const topicCount = useMemo(() => countTopicTree(topicTree), [topicTree]);
+  const expandableTopicKeys = useMemo(() => {
+    const keys = [];
+    const visit = (nodes) => nodes.forEach((node) => {
+      if (node.children.length) keys.push(node.key);
+      visit(node.children);
+    });
+    visit(topicTree);
+    return keys;
+  }, [topicTree]);
+
+  useEffect(() => {
+    setExpandedTopics(new Set(expandableTopicKeys.slice(0, 2)));
+  }, [conversation?._id, expandableTopicKeys]);
+
+  useEffect(() => {
+    if (!topicDrawerOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setTopicDrawerOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    topicSearchRef.current?.focus();
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [topicDrawerOpen]);
   const composerRef = useRef(null);
+  const threadRef = useRef(null);
   const autoStartRef = useRef(false);
   const submitMessageRef = useRef(null);
   const activeStreamRef = useRef(null);
@@ -47,6 +169,11 @@ function ResearchPage() {
   const openConversationRef = useRef(null);
 
   useEffect(() => () => activeStreamRef.current?.abort(), []);
+
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, [messages]);
 
   useEffect(() => {
     if (!token) {
@@ -98,6 +225,8 @@ function ResearchPage() {
     setError("");
     setNotice("");
     setSelectedTopic(null);
+    setTopicSearch("");
+    setTopicDrawerOpen(false);
     try {
       const data = await getConversation(token, conversationId);
       setConversation(data.conversation);
@@ -122,6 +251,8 @@ function ResearchPage() {
     setAwaitingTopicSelection(false);
     setAllowWholeWebsite(false);
     setSelectedTopic(null);
+    setTopicSearch("");
+    setTopicDrawerOpen(false);
     setNotice("");
     setDraft("");
   }
@@ -193,15 +324,19 @@ function ResearchPage() {
         },
       );
       const assistantMessage = response.message;
+      const responseTopics = Array.isArray(response.topics) && response.topics.length
+        ? response.topics
+        : topics;
+      const responseAllowsWholeWebsite = response.allowWholeWebsite === true || allowWholeWebsite;
       setMessages((current) => current.map((message) => {
         if (message._id === optimisticUserMessage._id) {
           return { ...optimisticUserMessage, _id: `sent-${optimisticUserMessage._id}` };
         }
         return message._id === streamingAssistantId ? assistantMessage : message;
       }));
-      setTopics(response.topics || []);
+      setTopics(responseTopics);
       setAwaitingTopicSelection(response.awaitingTopicSelection === true);
-      setAllowWholeWebsite(response.allowWholeWebsite === true);
+      setAllowWholeWebsite(responseAllowsWholeWebsite);
       setSelectedTopic(null);
       setConversations((current) => current.map((item) =>
         item._id === activeConversation._id
@@ -209,9 +344,9 @@ function ResearchPage() {
               ...item,
               title: item.title === "New Conversation" ? messageText.slice(0, 120) : item.title,
               sourceUrl: response.sourceUrl || item.sourceUrl || null,
-              availableTopics: response.topics || [],
+              availableTopics: responseTopics,
               awaitingTopicSelection: response.awaitingTopicSelection === true,
-              allowWholeWebsite: response.allowWholeWebsite === true,
+              allowWholeWebsite: responseAllowsWholeWebsite,
               updatedAt: new Date().toISOString(),
             }
           : item,
@@ -220,9 +355,9 @@ function ResearchPage() {
         ...current,
         title: current.title === "New Conversation" ? messageText.slice(0, 120) : current.title,
         sourceUrl: response.sourceUrl || current.sourceUrl || null,
-        availableTopics: response.topics || [],
+        availableTopics: responseTopics,
         awaitingTopicSelection: response.awaitingTopicSelection === true,
-        allowWholeWebsite: response.allowWholeWebsite === true,
+        allowWholeWebsite: responseAllowsWholeWebsite,
       } : current);
       if (response.awaitingTopicSelection) {
         setNotice("Choose a section to focus the next answer, or ask about the whole page.");
@@ -263,6 +398,28 @@ function ResearchPage() {
   function handleComposerSubmit(event) {
     event.preventDefault();
     void submitMessage();
+  }
+
+  function toggleTopic(topicKey) {
+    setExpandedTopics((current) => {
+      const next = new Set(current);
+      if (next.has(topicKey)) next.delete(topicKey);
+      else next.add(topicKey);
+      return next;
+    });
+  }
+
+  function selectTopic(title) {
+    setSelectedTopic(title);
+    const matchingHeading = Array.from(threadRef.current?.querySelectorAll("h1, h2, h3, h4") || [])
+      .find((heading) => heading.textContent.trim().toLocaleLowerCase() === title.toLocaleLowerCase());
+    if (matchingHeading) {
+      document.querySelectorAll(".topic-anchor-highlight").forEach((heading) => heading.classList.remove("topic-anchor-highlight"));
+      matchingHeading.classList.add("topic-anchor-highlight");
+      matchingHeading.scrollIntoView({ behavior: "smooth", block: "center" });
+      window.setTimeout(() => matchingHeading.classList.remove("topic-anchor-highlight"), 1800);
+    }
+    composerRef.current?.focus();
   }
 
   return (
@@ -313,77 +470,79 @@ function ResearchPage() {
               <h2>{conversation?.title || "What are you curious about?"}</h2>
             </div>
             {conversation?.sourceUrl && <span className="source-indicator" title={conversation.sourceUrl}>Website source attached</span>}
+            {conversation?.sourceUrl && topicCount > 0 && <button className="topic-drawer-trigger" type="button" aria-expanded={topicDrawerOpen} aria-controls="learning-tree-panel" onClick={() => setTopicDrawerOpen(true)}>Learning tree <span>{topicCount}</span></button>}
           </div>
 
           {error && <div className="research-alert" role="alert">{error}</div>}
           {notice && <div className="research-notice" role="status">{notice}</div>}
 
-          {loadingConversation ? (
-            <div className="research-empty-state">Opening your research…</div>
-          ) : messages.length ? (
-            <div className="message-thread" aria-live="polite">
-              {messages.map((message) => (
-                <article className={`message-row ${message.role}`} key={message._id}>
-                  {message.role === "assistant" && <img className="message-avatar" src={logo} alt="Reading Lizard" />}
-                  <div className="message-bubble">
-                    <span className="message-role">
-                      {message.role === "assistant" ? "Reading Lizard" : "You"}
-                      {message.status === "incomplete" && " · Incomplete"}
-                    </span>
-                    <div className="message-content">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>, pre: ({ children }) => <pre className="message-code">{children}</pre> }}>
-                        {message.content}
-                      </ReactMarkdown>
+          <div className={`research-workspace${conversation?.sourceUrl && topicCount > 0 ? " has-topic-tree" : ""}`}>
+            {loadingConversation ? (
+              <div className="research-empty-state">Opening your research…</div>
+            ) : messages.length ? (
+              <div className="message-thread" aria-live="polite" ref={threadRef}>
+                {messages.map((message) => (
+                  <article className={`message-row ${message.role}`} key={message._id}>
+                    {message.role === "assistant" && <img className="message-avatar" src={logo} alt="Reading Lizard" />}
+                    <div className="message-bubble">
+                      <span className="message-role">
+                        {message.role === "assistant" ? "Reading Lizard" : "You"}
+                        {message.status === "incomplete" && " · Incomplete"}
+                      </span>
+                      <div className="message-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>, pre: ({ children }) => <pre className="message-code">{children}</pre> }}>
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
                     </div>
-                  </div>
-                </article>
-              ))}
-              {sending && <div className="message-pending"><span /><span /><span /> Generating response…</div>}
-            </div>
-          ) : (
-            <div className="research-empty-state">
-              <img src={logo} alt="" />
-              <p>Paste a link, ask a question, or share a large text source.</p>
-              <span>Your answers stay in this conversation.</span>
-            </div>
-          )}
-
-          {awaitingTopicSelection && topics.length > 0 && (
-            <section className="topic-picker" aria-label="Website topics">
-              <div className="topic-picker-heading">
-                <div>
-                  <p className="research-eyebrow">PAGE SECTIONS</p>
-                  <h3>Choose where to begin</h3>
-                </div>
-                <span>{topics.length} topics</span>
-              </div>
-              <div className="topic-list">
-                {topics.map((topic) => (
-                  <button
-                    key={`${topic.level}-${topic.title}`}
-                    className={`topic-option${selectedTopic === topic.title ? " selected" : ""}`}
-                    onClick={() => {
-                      setSelectedTopic(topic.title);
-                      composerRef.current?.focus();
-                    }}
-                  >
-                    <span className="topic-level">H{topic.level}</span>
-                    <span>{topic.title}</span>
-                    <span className="topic-arrow" aria-hidden="true">→</span>
-                  </button>
+                  </article>
                 ))}
+                {sending && <div className="message-pending"><span /><span /><span /> Generating response…</div>}
               </div>
-            </section>
-          )}
+            ) : (
+              <div className="research-empty-state">
+                <img src={logo} alt="" />
+                <p>Paste a link, ask a question, or share a large text source.</p>
+                <span>Your answers stay in this conversation.</span>
+              </div>
+            )}
 
-          {allowWholeWebsite && awaitingTopicSelection && (
-            <button className={`whole-source-button${selectedTopic === "" ? " selected" : ""}`} onClick={() => {
-              setSelectedTopic("");
-              composerRef.current?.focus();
-            }}>
-              Ask about the whole website
-            </button>
-          )}
+            {conversation?.sourceUrl && topicCount > 0 && (
+              <>
+              {topicDrawerOpen && <button className="topic-drawer-backdrop" type="button" aria-label="Close learning tree" onClick={() => setTopicDrawerOpen(false)} />}
+              <aside className={`topic-picker${topicDrawerOpen ? " drawer-open" : ""}`} id="learning-tree-panel" aria-label="Indexed page topics">
+                <div className="topic-picker-heading">
+                  <div>
+                    <p className="research-eyebrow">LEARNING TREE</p>
+                    <h3>{awaitingTopicSelection ? "Choose a topic" : "Page topics"}</h3>
+                  </div>
+                  <span className="topic-tree-count">{topicCount} topics</span>
+                  <button className="topic-tree-close" type="button" aria-label="Close learning tree" onClick={() => setTopicDrawerOpen(false)}>×</button>
+                  <button className="topic-expand-all" type="button" disabled={!expandableTopicKeys.length} onClick={() => setExpandedTopics(expandableTopicKeys.length && expandableTopicKeys.every((key) => expandedTopics.has(key)) ? new Set() : new Set(expandableTopicKeys))}>
+                    {expandableTopicKeys.length && expandableTopicKeys.every((key) => expandedTopics.has(key)) ? "Collapse all" : "Expand all"}
+                  </button>
+                </div>
+                <label className="topic-search-wrap">
+                  <span aria-hidden="true">⌕</span>
+                  <input ref={topicSearchRef} type="search" value={topicSearch} onChange={(event) => setTopicSearch(event.target.value)} placeholder="Search topics" aria-label="Search topics" />
+                </label>
+                <nav className="topic-list" id="indexed-topic-tree" aria-label="Choose a topic">
+                  {visibleTopicTree.length ? (
+                    <ul role="tree">
+                      {visibleTopicTree.map((node) => <TopicTreeNode key={node.key} node={node} expandedTopics={expandedTopics} onToggle={toggleTopic} selectedTopic={selectedTopic} onSelect={selectTopic} onAsk={selectTopic} searchActive={Boolean(topicSearch.trim())} />)}
+                    </ul>
+                  ) : <p className="topic-search-empty">No topics match that search.</p>}
+                </nav>
+                <div className="topic-tree-footer"><button className={`whole-source-button${selectedTopic === "" ? " selected" : ""}`} onClick={() => {
+                    setSelectedTopic("");
+                    composerRef.current?.focus();
+                  }}>
+                    Ask about the whole page
+                  </button></div>
+              </aside>
+              </>
+            )}
+          </div>
 
           {selectedTopic && <div className="selected-topic-label">Focused on <strong>{selectedTopic}</strong><button onClick={() => setSelectedTopic(null)} aria-label="Clear selected topic">×</button></div>}
 

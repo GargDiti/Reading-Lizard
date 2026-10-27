@@ -82,6 +82,7 @@ def index_chunks(source_url: str, chunks: list[dict]) -> int:
                 "section_title": chunk.get(
                     "section_title", "Untitled"
                 ),
+                "section_level": chunk.get("section_level", 2),
                 "chunk_id": chunk_number,
             },
         }
@@ -230,3 +231,25 @@ def search_chunks(
         })
 
     return retrieved
+
+
+def get_indexed_topics(source_url: str) -> list[dict]:
+    """Return section names stored with a previously indexed website."""
+    if not source_url or not source_url.strip() or collection.count() == 0:
+        return []
+
+    indexed = collection.get(where={"source_url": source_url}, include=["metadatas"])
+    topics = []
+    seen = set()
+    for metadata in indexed.get("metadatas") or []:
+        metadata = metadata or {}
+        title = (metadata.get("section_title") or "").strip()
+        if not title or title.casefold() in seen:
+            continue
+        seen.add(title.casefold())
+        try:
+            level = int(metadata.get("section_level", 2))
+        except (TypeError, ValueError):
+            level = 2
+        topics.append({"level": min(3, max(1, level)), "title": title})
+    return topics
